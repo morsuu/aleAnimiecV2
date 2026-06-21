@@ -179,10 +179,13 @@
   });
 
   socket.on('video:loaded', ({ filename }) => {
-    player.src = `/uploads/${encodeURIComponent(filename)}`;
-    placeholder.classList.add('hidden');
-    player.pause();
-    player.currentTime = 0;
+    const encodedName = encodeURIComponent(filename);
+    if (!player.src.endsWith(encodedName)) {
+      player.src = `/uploads/${encodedName}`;
+      placeholder.classList.add('hidden');
+      player.pause();
+      player.currentTime = 0;
+    }
     setSyncStatus('loaded');
   });
 

@@ -221,9 +221,9 @@
   // ── Player ────────────────────────────────────────────────────────────────────
 
   function loadVideoForAdmin(filename) {
-    const src = `/uploads/${encodeURIComponent(filename)}`;
-    if (player.src !== src) {
-      player.src = src;
+    const encodedName = encodeURIComponent(filename);
+    if (!player.src.endsWith(encodedName)) {
+      player.src = `/uploads/${encodedName}`;
       player.load();
       placeholder.classList.add('hidden');
     }
@@ -252,9 +252,11 @@
     setStateUI(false);
   });
 
-  // Sync seek events (scrubbing)
+  // Sync seek events (scrubbing) – only for manual user seeks, not programmatic ones
   let seekTimer = null;
+  let ignoreSeeked = false;
   player.addEventListener('seeked', () => {
+    if (ignoreSeeked) { ignoreSeeked = false; return; }
     clearTimeout(seekTimer);
     seekTimer = setTimeout(() => {
       socket.emit('admin:seek', { password: adminPassword, currentTime: player.currentTime });
@@ -276,9 +278,11 @@
   function updatePlayerState(state) {
     if (!state.filename) return;
     loadVideoForAdmin(state.filename);
+    ignoreSeeked = true;
     if (state.playing) {
       const lag = (Date.now() - state.serverTime) / 1000;
       player.currentTime = state.currentTime + lag;
+      if (player.paused) player.play().catch(() => {});
     } else {
       player.currentTime = state.currentTime;
       player.pause();
