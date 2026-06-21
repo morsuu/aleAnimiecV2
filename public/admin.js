@@ -38,16 +38,12 @@
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
-  let adminPassword = sessionStorage.getItem('adminPassword') || '';
+  let adminPassword = '';
   let socket        = null;
   let selectedFile  = null;
   let loadedFilenames = [];
 
   // ── Login flow ────────────────────────────────────────────────────────────────
-
-  if (adminPassword) {
-    attemptLogin(adminPassword);
-  }
 
   pwSubmit.addEventListener('click', () => attemptLogin(pwInput.value.trim()));
   pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwSubmit.click(); });
@@ -74,7 +70,6 @@
       }
       // 400 (no file) means the password was accepted
       adminPassword = pw;
-      sessionStorage.setItem('adminPassword', pw);
       loginOverlay.style.display = 'none';
       mainContent.style.display  = 'block';
       initSocket();
