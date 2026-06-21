@@ -14,6 +14,7 @@ const multer = require('multer');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
+const FRONTEND_URL = process.env.FRONTEND_URL || ''; // e.g. https://ale-animiec.vercel.app
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
@@ -32,6 +33,16 @@ let videoState = {
 // ─── Express ─────────────────────────────────────────────────────────────────
 
 const app = express();
+
+// ─── CORS (allow frontend on different origin, e.g. Vercel) ──────────────────
+app.use((req, res, next) => {
+  const origin = FRONTEND_URL || req.headers.origin || '*';
+  res.header('Access-Control-Allow-Origin', origin);
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, x-admin-password');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -195,7 +206,10 @@ const server = http.createServer(app);
 // ─── Socket.io ───────────────────────────────────────────────────────────────
 
 const io = new Server(server, {
-  cors: { origin: false },
+  cors: {
+    origin: FRONTEND_URL || true,
+    methods: ['GET', 'POST'],
+  },
 });
 
 /** Compute the state a viewer should receive right now. */

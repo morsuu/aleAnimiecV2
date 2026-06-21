@@ -112,7 +112,14 @@
 
 </div><!-- /container -->
 
-<script src="/socket.io/socket.io.js"></script>
+<script src="/config.js"></script>
+<script>
+  // Load socket.io client from backend when BACKEND_URL is set, otherwise local
+  (function() {
+    var src = window.BACKEND_URL ? window.BACKEND_URL + '/socket.io/socket.io.js' : '/socket.io/socket.io.js';
+    document.write('<script src="' + src + '"><\/script>');
+  })();
+</script>
 <script src="/admin.js"></script>
 </body>
 </html>
