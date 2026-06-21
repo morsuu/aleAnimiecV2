@@ -23,7 +23,8 @@
 
   // ── Socket ──────────────────────────────────────────────────────────────────
 
-  const socket = io();
+  const BACKEND = window.BACKEND_URL || '';
+  const socket = io(BACKEND || undefined);
 
   // ── Clock offset (NTP-style) ────────────────────────────────────────────────
   // We measure the difference between server clock and client clock so that
@@ -81,7 +82,7 @@
     if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) {
       return Promise.resolve();
     }
-    const src = isExternal ? `/proxy?url=${encodeURIComponent(filename)}` : `/uploads/${encodeURIComponent(filename)}`;
+    const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
     const alreadyLoaded = isExternal
       ? player.src.includes(encodeURIComponent(filename))
       : player.src.endsWith(encodeURIComponent(filename));
@@ -186,7 +187,7 @@
   });
 
   socket.on('video:loaded', ({ filename, isExternal }) => {
-    const src = isExternal ? `/proxy?url=${encodeURIComponent(filename)}` : `/uploads/${encodeURIComponent(filename)}`;
+    const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
     const alreadyLoaded = isExternal
       ? player.src.includes(encodeURIComponent(filename))
       : player.src.endsWith(encodeURIComponent(filename));

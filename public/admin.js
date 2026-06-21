@@ -47,6 +47,8 @@
   let selectedFile  = null;
   let loadedFilenames = [];
 
+  const BACKEND = window.BACKEND_URL || '';
+
   // ── Login flow ────────────────────────────────────────────────────────────────
 
   pwSubmit.addEventListener('click', () => attemptLogin(pwInput.value.trim()));
@@ -63,7 +65,7 @@
 
     // Quick auth-check: send a no-op OPTIONS-like fetch
     try {
-      const res = await fetch('/upload', {
+      const res = await fetch(`${BACKEND}/upload`, {
         method: 'POST',
         headers: { 'x-admin-password': pw },
         body: new FormData(), // empty – server will reject, but we check the HTTP code
@@ -85,7 +87,7 @@
   // ── Socket ────────────────────────────────────────────────────────────────────
 
   function initSocket() {
-    socket = io();
+    socket = io(BACKEND || undefined);
 
     socket.on('connect', () => {
       connDot.className   = 'dot green';
@@ -148,7 +150,7 @@
     fd.append('video', file);
 
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/upload');
+    xhr.open('POST', `${BACKEND}/upload`);
     xhr.setRequestHeader('x-admin-password', adminPassword);
 
     progressWrap.classList.remove('hidden');
@@ -247,7 +249,7 @@
   function loadVideoForAdmin(filename, isExternal) {
     // Only allow http/https for external URLs
     if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) return;
-    const src = isExternal ? `/proxy?url=${encodeURIComponent(filename)}` : `/uploads/${encodeURIComponent(filename)}`;
+    const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
     const currentSrc = player.src; // absolute URL
     const alreadyLoaded = isExternal ? currentSrc.includes(encodeURIComponent(filename)) : currentSrc.endsWith(encodeURIComponent(filename));
     if (!alreadyLoaded) {
