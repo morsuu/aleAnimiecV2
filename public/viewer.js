@@ -3,7 +3,10 @@
 
 (function () {
   const player      = document.getElementById('player');
+  const embedPlayer = document.getElementById('embed-player');
   const placeholder = document.getElementById('placeholder');
+  const videoWrap   = document.getElementById('video-wrap');
+  const btnFullscreen = document.getElementById('btn-fullscreen');
 
   // connection UI
   const connDot   = document.getElementById('conn-dot');
@@ -20,6 +23,79 @@
   const timerDuration = document.getElementById('timer-duration');
   const timerDrift    = document.getElementById('timer-drift');
   const btnResync     = document.getElementById('btn-resync');
+
+  // ── Fullscreen ───────────────────────────────────────────────────────────────
+
+  btnFullscreen.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      videoWrap.requestFullscreen().catch(() => {});
+    }
+  });
+
+  // ── Embed helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * Convert a YouTube / Twitch URL into an embeddable iframe URL.
+   * Returns null if the URL is not a recognised embed-able service.
+   */
+  function toEmbedUrl(url) {
+    try {
+      const u = new URL(url);
+
+      // YouTube: youtube.com/watch?v=ID | youtu.be/ID | youtube.com/live/ID
+      if (u.hostname.includes('youtube.com') || u.hostname === 'youtu.be') {
+        let vid = null;
+        if (u.hostname === 'youtu.be') {
+          vid = u.pathname.slice(1);
+        } else if (u.pathname.startsWith('/watch')) {
+          vid = u.searchParams.get('v');
+        } else if (u.pathname.startsWith('/live/')) {
+          vid = u.pathname.split('/live/')[1];
+        } else if (u.pathname.startsWith('/embed/')) {
+          return url; // already embed
+        }
+        if (vid) return `https://www.youtube.com/embed/${vid}?autoplay=1`;
+      }
+
+      // Twitch: twitch.tv/CHANNEL | twitch.tv/videos/ID
+      if (u.hostname.includes('twitch.tv')) {
+        if (u.pathname.startsWith('/videos/')) {
+          const videoId = u.pathname.split('/videos/')[1];
+          return `https://player.twitch.tv/?video=${videoId}&parent=${location.hostname}&autoplay=true`;
+        }
+        const channel = u.pathname.replace(/^\//, '').split('/')[0];
+        if (channel) {
+          return `https://player.twitch.tv/?channel=${channel}&parent=${location.hostname}&autoplay=true`;
+        }
+      }
+
+      // Fallback: return url as-is (let iframe try)
+      return url;
+    } catch (_) {
+      return url;
+    }
+  }
+
+  let isEmbedMode = false;
+
+  function showEmbed(url) {
+    isEmbedMode = true;
+    const embedUrl = toEmbedUrl(url);
+    player.classList.add('hidden');
+    player.pause();
+    embedPlayer.classList.remove('hidden');
+    embedPlayer.src = embedUrl;
+    placeholder.classList.add('hidden');
+  }
+
+  function showVideo() {
+    isEmbedMode = false;
+    embedPlayer.classList.add('hidden');
+    embedPlayer.src = '';
+    player.classList.remove('hidden');
+  }
 
   // ── Socket ──────────────────────────────────────────────────────────────────
 
@@ -125,6 +201,16 @@
       return;
     }
 
+    // Embed mode (YouTube, Twitch, etc.)
+    if (state.isEmbed) {
+      showEmbed(state.filename);
+      setSyncStatus('synced');
+      return;
+    }
+
+    // Normal video mode
+    if (isEmbedMode) showVideo();
+
     await loadVideo(state.filename, !!state.isExternal);
 
     const target = state.playing
@@ -186,7 +272,13 @@
     applyState(state);
   });
 
-  socket.on('video:loaded', ({ filename, isExternal }) => {
+  socket.on('video:loaded', ({ filename, isExternal, isEmbed }) => {
+    if (isEmbed) {
+      showEmbed(filename);
+      setSyncStatus('loaded');
+      return;
+    }
+    if (isEmbedMode) showVideo();
     const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
     const alreadyLoaded = isExternal
       ? player.src.includes(encodeURIComponent(filename))
