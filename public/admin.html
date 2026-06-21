@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>aleAnimiec – Admin</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header>
+  <h1>ale<span>Animiec</span> <span style="font-weight:300;font-size:1rem">— panel admina</span></h1>
+  <div style="display:flex;gap:.75rem;align-items:center">
+    <div class="badge">
+      <span class="dot" id="conn-dot"></span>
+      <span id="conn-label">Łączenie…</span>
+    </div>
+    <div class="badge" id="viewers-badge" title="Aktywni widzowie">
+      👁 <span id="viewers-count">0</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── LOGIN OVERLAY ─────────────────────────────────────────────────────── -->
+<div id="login-overlay" style="
+  position:fixed;inset:0;background:rgba(13,13,13,.97);
+  display:flex;align-items:center;justify-content:center;z-index:999;">
+  <div class="card" style="width:320px;max-width:95vw">
+    <h2 style="margin-bottom:1rem">Logowanie admina</h2>
+    <div class="form-group">
+      <label for="pw-input">Hasło</label>
+      <input type="password" id="pw-input" placeholder="Wpisz hasło…" autocomplete="current-password" />
+    </div>
+    <button class="btn btn-primary w-full mt-2" id="pw-submit">Zaloguj</button>
+    <p class="text-sm text-muted mt-1" id="pw-error" style="color:#e94560"></p>
+  </div>
+</div>
+
+<!-- ── MAIN ──────────────────────────────────────────────────────────────── -->
+<div class="container" id="main-content" style="display:none">
+
+  <!-- UPLOAD CARD -->
+  <div class="card mt-2">
+    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Wgraj film</h2>
+
+    <div class="drop-zone" id="drop-zone">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <p>Przeciągnij plik video lub <strong style="color:var(--accent)">kliknij, aby wybrać</strong></p>
+      <p id="drop-filename" class="mt-1"></p>
+      <input type="file" id="file-input" accept="video/*" style="display:none" />
+    </div>
+
+    <div class="mt-2" id="upload-controls" style="display:none">
+      <button class="btn btn-primary" id="upload-btn">Wgraj ▲</button>
+      <span class="text-sm text-muted" style="margin-left:.75rem" id="upload-status"></span>
+    </div>
+
+    <div class="progress-wrap mt-1 hidden" id="progress-wrap">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+  </div>
+
+  <!-- VIDEO LIBRARY CARD -->
+  <div class="card mt-2" id="library-card" style="display:none">
+    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Wgrane filmy</h2>
+    <div id="library-list" style="display:flex;flex-direction:column;gap:.5rem"></div>
+  </div>
+
+  <!-- PLAYER CARD -->
+  <div class="card mt-2" id="player-card">
+    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Odtwarzacz (admin)</h2>
+
+    <div class="video-wrap" id="video-wrap">
+      <video id="player" preload="auto"></video>
+      <div class="video-placeholder" id="placeholder">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M4 2l16 10L4 22V2z"/></svg>
+        <span>Wgraj i wybierz film powyżej</span>
+      </div>
+    </div>
+
+    <!-- controls -->
+    <div class="mt-2 flex gap-2 flex-wrap items-center" id="playback-controls" style="display:none!important">
+      <button class="btn btn-primary" id="btn-play">▶ Play</button>
+      <button class="btn btn-ghost"   id="btn-pause">⏸ Pauza</button>
+      <button class="btn btn-ghost"   id="btn-restart">⏮ Od początku</button>
+    </div>
+
+    <div class="status-strip mt-1">
+      <span class="dot" id="state-dot"></span>
+      <span id="state-label">Brak aktywnego filmu</span>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/admin.js"></script>
+</body>
+</html>

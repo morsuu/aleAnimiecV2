@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>aleAnimiec – Oglądaj</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header>
+  <h1>ale<span>Animiec</span> <span style="font-weight:300;font-size:1rem">— oglądaj</span></h1>
+  <div class="badge">
+    <span class="dot" id="conn-dot"></span>
+    <span id="conn-label">Łączenie…</span>
+  </div>
+</header>
+
+<div class="container">
+  <div class="video-wrap mt-2" id="video-wrap">
+    <video id="player" preload="auto"></video>
+    <div class="video-placeholder" id="placeholder">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M4 2l16 10L4 22V2z"/>
+      </svg>
+      <span>Czekaj na film od admina…</span>
+    </div>
+  </div>
+
+  <div class="status-strip mt-1" id="status-strip">
+    <span class="dot" id="sync-dot"></span>
+    <span id="sync-label">Brak synchronizacji</span>
+  </div>
+</div>
+
+<!-- sync pill (top-right) -->
+<div id="sync-indicator">
+  <span class="dot" id="pill-dot"></span>
+  <span id="pill-label">—</span>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/viewer.js"></script>
+</body>
+</html>
