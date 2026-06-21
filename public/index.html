@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>aleAnimiec – Oglądaj</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header>
+  <h1>ale<span>Animiec</span> <span style="font-weight:300;font-size:1rem">— oglądaj</span></h1>
+  <div class="badge">
+    <span class="dot" id="conn-dot"></span>
+    <span id="conn-label">Łączenie…</span>
+  </div>
+</header>
+
+<div class="container">
+  <div class="video-wrap mt-2" id="video-wrap">
+    <video id="player" preload="auto"></video>
+    <div class="video-placeholder" id="placeholder">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M4 2l16 10L4 22V2z"/>
+      </svg>
+      <span>Czekaj na film od admina…</span>
+    </div>
+  </div>
+
+  <div class="status-strip mt-1" id="status-strip">
+    <span class="dot" id="sync-dot"></span>
+    <span id="sync-label">Brak synchronizacji</span>
+  </div>
+
+  <!-- Timer bar -->
+  <div class="timer-bar mt-2" id="timer-bar">
+    <div class="timer-bar__time">
+      <span id="timer-current">00:00.000</span>
+      <span class="timer-bar__sep">/</span>
+      <span id="timer-duration">00:00.000</span>
+    </div>
+    <div class="timer-bar__drift">
+      Dryft: <span id="timer-drift">0</span> ms
+    </div>
+    <button class="btn btn-ghost btn-sm" id="btn-resync">⟳ Synchronizuj</button>
+  </div>
+</div>
+
+<!-- sync pill (top-right) -->
+<div id="sync-indicator">
+  <span class="dot" id="pill-dot"></span>
+  <span id="pill-label">—</span>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/viewer.js"></script>
+</body>
+</html>
