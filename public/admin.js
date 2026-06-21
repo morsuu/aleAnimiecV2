@@ -71,7 +71,7 @@
   function toEmbedUrl(url) {
     try {
       const u = new URL(url);
-      if (u.hostname.includes('youtube.com') || u.hostname === 'youtu.be') {
+      if (u.hostname === 'www.youtube.com' || u.hostname === 'youtube.com' || u.hostname === 'youtu.be' || u.hostname === 'm.youtube.com') {
         let vid = null;
         if (u.hostname === 'youtu.be') vid = u.pathname.slice(1);
         else if (u.pathname.startsWith('/watch')) vid = u.searchParams.get('v');
@@ -79,7 +79,7 @@
         else if (u.pathname.startsWith('/embed/')) return url;
         if (vid) return `https://www.youtube.com/embed/${vid}?autoplay=1`;
       }
-      if (u.hostname.includes('twitch.tv')) {
+      if (u.hostname === 'www.twitch.tv' || u.hostname === 'twitch.tv' || u.hostname === 'm.twitch.tv') {
         if (u.pathname.startsWith('/videos/')) {
           const videoId = u.pathname.split('/videos/')[1];
           return `https://player.twitch.tv/?video=${videoId}&parent=${location.hostname}&autoplay=true`;
