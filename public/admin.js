@@ -52,7 +52,7 @@
   let adminPassword = '';
   let socket        = null;
   let selectedFile  = null;
-  let loadedFilenames = [];
+  let loadedFilenames = []; // { name: string, isEmbed: boolean }[]
 
   const BACKEND = window.BACKEND_URL || '';
 
@@ -75,7 +75,8 @@
         let vid = null;
         if (u.hostname === 'youtu.be') vid = u.pathname.slice(1);
         else if (u.pathname.startsWith('/watch')) vid = u.searchParams.get('v');
-        else if (u.pathname.startsWith('/live/')) vid = u.pathname.split('/live/')[1];
+        else if (u.pathname.startsWith('/shorts/')) vid = u.pathname.split('/shorts/')[1].split('/')[0];
+        else if (u.pathname.startsWith('/live/')) vid = u.pathname.split('/live/')[1].split('/')[0];
         else if (u.pathname.startsWith('/embed/')) return url;
         if (vid) return `https://www.youtube.com/embed/${vid}?autoplay=1`;
       }
@@ -168,8 +169,8 @@
     });
 
     socket.on('video:loaded', ({ filename, isEmbed }) => {
-      if (!loadedFilenames.includes(filename)) {
-        loadedFilenames.push(filename);
+      if (!loadedFilenames.some(f => f.name === filename)) {
+        loadedFilenames.push({ name: filename, isEmbed: !!isEmbed });
         renderLibrary();
       }
       if (isEmbed) {
@@ -238,8 +239,8 @@
         const data = JSON.parse(xhr.responseText);
         uploadStatus.textContent = '✓ Wgrano!';
         selectedFile = null;
-        if (!loadedFilenames.includes(data.filename)) {
-          loadedFilenames.push(data.filename);
+        if (!loadedFilenames.some(f => f.name === data.filename)) {
+          loadedFilenames.push({ name: data.filename, isEmbed: false });
           renderLibrary();
         }
         loadVideoForAdmin(data.filename, false);

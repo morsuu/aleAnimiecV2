@@ -51,8 +51,10 @@
           vid = u.pathname.slice(1);
         } else if (u.pathname.startsWith('/watch')) {
           vid = u.searchParams.get('v');
+        } else if (u.pathname.startsWith('/shorts/')) {
+          vid = u.pathname.split('/shorts/')[1].split('/')[0];
         } else if (u.pathname.startsWith('/live/')) {
-          vid = u.pathname.split('/live/')[1];
+          vid = u.pathname.split('/live/')[1].split('/')[0];
         } else if (u.pathname.startsWith('/embed/')) {
           return url; // already embed
         }
