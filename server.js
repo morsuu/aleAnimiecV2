@@ -21,10 +21,11 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
 // ─── Video state ─────────────────────────────────────────────────────────────
 
-/** @type {{ filename: string|null, isExternal: boolean, playing: boolean, currentTime: number, serverTime: number }} */
+/** @type {{ filename: string|null, isExternal: boolean, isEmbed: boolean, playing: boolean, currentTime: number, serverTime: number }} */
 let videoState = {
   filename: null,
   isExternal: false,
+  isEmbed: false,
   playing: false,
   currentTime: 0,
   serverTime: Date.now(),
@@ -98,6 +99,7 @@ app.post('/upload', (req, res, next) => {
   videoState = {
     filename: file.filename,
     isExternal: false,
+    isEmbed: false,
     playing: false,
     currentTime: 0,
     serverTime: Date.now(),
@@ -296,11 +298,12 @@ io.on('connection', (socket) => {
     videoState = {
       filename,
       isExternal: false,
+      isEmbed: false,
       playing: false,
       currentTime: 0,
       serverTime: Date.now(),
     };
-    io.emit('video:loaded', { filename, isExternal: false });
+    io.emit('video:loaded', { filename, isExternal: false, isEmbed: false });
     io.emit('sync:state', currentState());
   });
 
@@ -312,11 +315,28 @@ io.on('connection', (socket) => {
     videoState = {
       filename: url,
       isExternal: true,
+      isEmbed: false,
       playing: false,
       currentTime: 0,
       serverTime: Date.now(),
     };
-    io.emit('video:loaded', { filename: url, isExternal: true });
+    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: false });
+    io.emit('sync:state', currentState());
+  });
+
+  socket.on('admin:load-embed', ({ password, url }) => {
+    if (password !== ADMIN_PASSWORD) return;
+    if (!url || typeof url !== 'string') return;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+    videoState = {
+      filename: url,
+      isExternal: true,
+      isEmbed: true,
+      playing: false,
+      currentTime: 0,
+      serverTime: Date.now(),
+    };
+    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: true });
     io.emit('sync:state', currentState());
   });
 });

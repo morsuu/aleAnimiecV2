@@ -79,6 +79,20 @@
     </div>
   </div>
 
+  <!-- EMBED CARD (YouTube, Twitch, etc.) -->
+  <div class="card mt-2">
+    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Osadź stream / wideo (YouTube, Twitch…)</h2>
+    <div class="form-group">
+      <label for="embed-input">Link do YouTube, Twitch itp.</label>
+      <input type="url" id="embed-input" placeholder="https://www.youtube.com/watch?v=... lub https://www.twitch.tv/..." style="width:100%" />
+    </div>
+    <p class="text-sm text-muted mt-1">Obsługiwane: YouTube (filmy, live), Twitch (kanały, VOD), oraz inne serwisy z obsługą iframe embed.</p>
+    <div class="mt-2" style="display:flex;align-items:center;gap:.75rem">
+      <button class="btn btn-primary" id="embed-load-btn">📺 Osadź</button>
+      <span class="text-sm text-muted" id="embed-status"></span>
+    </div>
+  </div>
+
   <!-- VIDEO LIBRARY CARD -->
   <div class="card mt-2" id="library-card" style="display:none">
     <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Wgrane filmy</h2>
@@ -91,10 +105,16 @@
 
     <div class="video-wrap" id="video-wrap">
       <video id="player" preload="auto"></video>
+      <iframe id="embed-player" class="hidden" allowfullscreen allow="autoplay; encrypted-media; fullscreen"></iframe>
       <div class="video-placeholder" id="placeholder">
         <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M4 2l16 10L4 22V2z"/></svg>
         <span>Wgraj i wybierz film powyżej</span>
       </div>
+      <button class="btn-fullscreen" id="btn-fullscreen" title="Pełny ekran">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+        </svg>
+      </button>
     </div>
 
     <!-- controls -->

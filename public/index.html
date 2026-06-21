@@ -22,12 +22,18 @@
 <div class="container">
   <div class="video-wrap mt-2" id="video-wrap">
     <video id="player" preload="auto"></video>
+    <iframe id="embed-player" class="hidden" allowfullscreen allow="autoplay; encrypted-media; fullscreen"></iframe>
     <div class="video-placeholder" id="placeholder">
       <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
         <path d="M4 2l16 10L4 22V2z"/>
       </svg>
       <span>Czekaj na film od admina…</span>
     </div>
+    <button class="btn-fullscreen" id="btn-fullscreen" title="Pełny ekran">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+      </svg>
+    </button>
   </div>
 
   <div class="status-strip mt-1" id="status-strip">

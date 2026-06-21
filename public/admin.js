@@ -31,8 +31,15 @@
   const urlLoadBtn     = document.getElementById('url-load-btn');
   const urlStatus      = document.getElementById('url-status');
 
+  const embedInput     = document.getElementById('embed-input');
+  const embedLoadBtn   = document.getElementById('embed-load-btn');
+  const embedStatus    = document.getElementById('embed-status');
+
   const placeholder    = document.getElementById('placeholder');
   const player         = document.getElementById('player');
+  const embedPlayer    = document.getElementById('embed-player');
+  const videoWrap      = document.getElementById('video-wrap');
+  const btnFullscreen  = document.getElementById('btn-fullscreen');
   const playbackControls = document.getElementById('playback-controls');
   const btnPlay        = document.getElementById('btn-play');
   const btnPause       = document.getElementById('btn-pause');
@@ -48,6 +55,61 @@
   let loadedFilenames = [];
 
   const BACKEND = window.BACKEND_URL || '';
+
+  // ── Fullscreen ────────────────────────────────────────────────────────────────
+
+  btnFullscreen.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      videoWrap.requestFullscreen().catch(() => {});
+    }
+  });
+
+  // ── Embed helpers ─────────────────────────────────────────────────────────────
+
+  function toEmbedUrl(url) {
+    try {
+      const u = new URL(url);
+      if (u.hostname === 'www.youtube.com' || u.hostname === 'youtube.com' || u.hostname === 'youtu.be' || u.hostname === 'm.youtube.com') {
+        let vid = null;
+        if (u.hostname === 'youtu.be') vid = u.pathname.slice(1);
+        else if (u.pathname.startsWith('/watch')) vid = u.searchParams.get('v');
+        else if (u.pathname.startsWith('/live/')) vid = u.pathname.split('/live/')[1];
+        else if (u.pathname.startsWith('/embed/')) return url;
+        if (vid) return `https://www.youtube.com/embed/${vid}?autoplay=1`;
+      }
+      if (u.hostname === 'www.twitch.tv' || u.hostname === 'twitch.tv' || u.hostname === 'm.twitch.tv') {
+        if (u.pathname.startsWith('/videos/')) {
+          const videoId = u.pathname.split('/videos/')[1];
+          return `https://player.twitch.tv/?video=${videoId}&parent=${location.hostname}&autoplay=true`;
+        }
+        const channel = u.pathname.replace(/^\//, '').split('/')[0];
+        if (channel) return `https://player.twitch.tv/?channel=${channel}&parent=${location.hostname}&autoplay=true`;
+      }
+      return url;
+    } catch (_) { return url; }
+  }
+
+  let isEmbedMode = false;
+
+  function showEmbed(url) {
+    isEmbedMode = true;
+    player.classList.add('hidden');
+    player.pause();
+    embedPlayer.classList.remove('hidden');
+    embedPlayer.src = toEmbedUrl(url);
+    placeholder.classList.add('hidden');
+    // Hide standard playback controls for embeds
+    playbackControls.style.display = 'none';
+  }
+
+  function showVideo() {
+    isEmbedMode = false;
+    embedPlayer.classList.add('hidden');
+    embedPlayer.src = '';
+    player.classList.remove('hidden');
+  }
 
   // ── Login flow ────────────────────────────────────────────────────────────────
 
@@ -105,10 +167,13 @@
       updatePlayerState(state);
     });
 
-    socket.on('video:loaded', ({ filename }) => {
+    socket.on('video:loaded', ({ filename, isEmbed }) => {
       if (!loadedFilenames.includes(filename)) {
         loadedFilenames.push(filename);
         renderLibrary();
+      }
+      if (isEmbed) {
+        showEmbed(filename);
       }
     });
   }
@@ -206,6 +271,21 @@
     }
   });
 
+  // ── Load embed (YouTube, Twitch, etc.) ──────────────────────────────────────
+
+  embedLoadBtn.addEventListener('click', () => {
+    const url = embedInput.value.trim();
+    if (!url) { embedStatus.textContent = 'Podaj URL.'; return; }
+    try { new URL(url); } catch (_) { embedStatus.textContent = 'Nieprawidłowy URL.'; return; }
+    socket.emit('admin:load-embed', { password: adminPassword, url });
+    showEmbed(url);
+    embedStatus.textContent = '✓ Osadzono!';
+    if (!loadedFilenames.includes(url)) {
+      loadedFilenames.push(url);
+      renderLibrary();
+    }
+  });
+
   // ── Library ───────────────────────────────────────────────────────────────────
 
   function renderLibrary() {
@@ -247,6 +327,8 @@
   // ── Player ────────────────────────────────────────────────────────────────────
 
   function loadVideoForAdmin(filename, isExternal) {
+    // Switch back from embed mode if needed
+    if (isEmbedMode) showVideo();
     // Only allow http/https for external URLs
     if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) return;
     const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
@@ -307,6 +389,10 @@
 
   function updatePlayerState(state) {
     if (!state.filename) return;
+    if (state.isEmbed) {
+      showEmbed(state.filename);
+      return;
+    }
     loadVideoForAdmin(state.filename, !!state.isExternal);
     ignoreSeeked = true;
     if (state.playing) {
