@@ -117,6 +117,22 @@ app.get('/proxy', (req, res) => {
     return res.status(400).json({ error: 'Invalid URL' });
   }
 
+  // Block requests to private/internal networks
+  const hostname = parsed.hostname;
+  if (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '0.0.0.0' ||
+    hostname.endsWith('.local') ||
+    hostname.endsWith('.internal') ||
+    /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.)/.test(hostname) ||
+    /^f[cd][0-9a-f]{2}:/i.test(hostname) || // IPv6 private
+    /^fe80:/i.test(hostname) // IPv6 link-local
+  ) {
+    return res.status(403).json({ error: 'Requests to private/internal networks are not allowed' });
+  }
+
   const isHttps = parsed.protocol === 'https:';
   const lib = isHttps ? https : http;
 
@@ -126,7 +142,22 @@ app.get('/proxy', (req, res) => {
     headers['Range'] = req.headers.range;
   }
 
-  const proxyReq = lib.get(targetUrl, { headers }, (proxyRes) => {
+  const proxyReq = lib.get(targetUrl, { headers, lookup: (hostname, opts, cb) => {
+    // Use DNS lookup callback to block resolved private IPs
+    const dns = require('dns');
+    dns.lookup(hostname, opts, (err, address, family) => {
+      if (err) return cb(err);
+      if (
+        /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.)/.test(address) ||
+        address === '::1' ||
+        /^f[cd][0-9a-f]{2}:/i.test(address) ||
+        /^fe80:/i.test(address)
+      ) {
+        return cb(new Error('Resolved to a private IP address'));
+      }
+      cb(null, address, family);
+    });
+  } }, (proxyRes) => {
     // Follow redirects (up to 5)
     if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
       // Redirect – re-issue request to the new URL
