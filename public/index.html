@@ -31,6 +31,19 @@
     <span class="dot" id="sync-dot"></span>
     <span id="sync-label">Brak synchronizacji</span>
   </div>
+
+  <!-- Timer bar -->
+  <div class="timer-bar mt-2" id="timer-bar">
+    <div class="timer-bar__time">
+      <span id="timer-current">00:00.000</span>
+      <span class="timer-bar__sep">/</span>
+      <span id="timer-duration">00:00.000</span>
+    </div>
+    <div class="timer-bar__drift">
+      Dryft: <span id="timer-drift">0</span> ms
+    </div>
+    <button class="btn btn-ghost btn-sm" id="btn-resync">⟳ Synchronizuj</button>
+  </div>
 </div>
 
 <!-- sync pill (top-right) -->

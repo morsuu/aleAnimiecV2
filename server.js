@@ -117,12 +117,33 @@ function broadcastViewerCount() {
   io.emit('viewers:count', io.engine.clientsCount);
 }
 
+// ── Periodic heartbeat: broadcast state every 3s for tight sync ────────────
+setInterval(() => {
+  if (videoState.filename && videoState.playing) {
+    io.emit('sync:state', currentState());
+  }
+}, 3000);
+
 io.on('connection', (socket) => {
   broadcastViewerCount();
   socket.on('disconnect', () => broadcastViewerCount());
 
   // Immediately send the current state so the viewer can sync
   socket.emit('sync:state', currentState());
+
+  // ── Clock offset (NTP-style) ─────────────────────────────────────────────
+  // Client sends `ping:time` with its local timestamp, server responds with
+  // server timestamp so client can compute clock offset.
+  socket.on('ping:time', (clientTime, ack) => {
+    if (typeof ack === 'function') {
+      ack({ serverTime: Date.now(), clientTime });
+    }
+  });
+
+  // ── Manual resync request from viewer ────────────────────────────────────
+  socket.on('viewer:resync', () => {
+    socket.emit('sync:state', currentState());
+  });
 
   // ── Admin events (password-checked) ──────────────────────────────────────
 
