@@ -44,6 +44,8 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get('/health', (req, res) => res.sendStatus(200));
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve uploaded videos
@@ -318,6 +320,17 @@ io.on('connection', (socket) => {
     io.emit('sync:state', currentState());
   });
 });
+
+// ─── Keep-alive self-ping (prevents Render free tier from sleeping) ──────────
+
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || '';
+if (SELF_URL) {
+  const KEEP_ALIVE_INTERVAL = 10 * 60 * 1000; // every 10 minutes
+  setInterval(() => {
+    const lib = SELF_URL.startsWith('https') ? https : http;
+    lib.get(`${SELF_URL}/`, (res) => { res.resume(); }).on('error', () => {});
+  }, KEEP_ALIVE_INTERVAL);
+}
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
