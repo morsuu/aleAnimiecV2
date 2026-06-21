@@ -20,9 +20,10 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
 // ─── Video state ─────────────────────────────────────────────────────────────
 
-/** @type {{ filename: string|null, playing: boolean, currentTime: number, serverTime: number }} */
+/** @type {{ filename: string|null, isExternal: boolean, playing: boolean, currentTime: number, serverTime: number }} */
 let videoState = {
   filename: null,
+  isExternal: false,
   playing: false,
   currentTime: 0,
   serverTime: Date.now(),
@@ -83,12 +84,13 @@ app.post('/upload', (req, res, next) => {
 
   videoState = {
     filename: file.filename,
+    isExternal: false,
     playing: false,
     currentTime: 0,
     serverTime: Date.now(),
   };
 
-  io.emit('video:loaded', { filename: file.filename });
+  io.emit('video:loaded', { filename: file.filename, isExternal: false });
   res.json({ filename: file.filename });
 });
 
@@ -183,11 +185,28 @@ io.on('connection', (socket) => {
     if (password !== ADMIN_PASSWORD) return;
     videoState = {
       filename,
+      isExternal: false,
       playing: false,
       currentTime: 0,
       serverTime: Date.now(),
     };
-    io.emit('video:loaded', { filename });
+    io.emit('video:loaded', { filename, isExternal: false });
+    io.emit('sync:state', currentState());
+  });
+
+  socket.on('admin:load-url', ({ password, url }) => {
+    if (password !== ADMIN_PASSWORD) return;
+    if (!url || typeof url !== 'string') return;
+    // Only allow http/https URLs
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+    videoState = {
+      filename: url,
+      isExternal: true,
+      playing: false,
+      currentTime: 0,
+      serverTime: Date.now(),
+    };
+    io.emit('video:loaded', { filename: url, isExternal: true });
     io.emit('sync:state', currentState());
   });
 });

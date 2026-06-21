@@ -27,6 +27,10 @@
   const libraryCard    = document.getElementById('library-card');
   const libraryList    = document.getElementById('library-list');
 
+  const urlInput       = document.getElementById('url-input');
+  const urlLoadBtn     = document.getElementById('url-load-btn');
+  const urlStatus      = document.getElementById('url-status');
+
   const placeholder    = document.getElementById('placeholder');
   const player         = document.getElementById('player');
   const playbackControls = document.getElementById('playback-controls');
@@ -171,7 +175,7 @@
           loadedFilenames.push(data.filename);
           renderLibrary();
         }
-        loadVideoForAdmin(data.filename);
+        loadVideoForAdmin(data.filename, false);
       } else {
         uploadStatus.textContent = `Błąd: ${xhr.status}`;
       }
@@ -185,6 +189,21 @@
     xhr.send(fd);
   }
 
+  // ── Load from URL ─────────────────────────────────────────────────────────────
+
+  urlLoadBtn.addEventListener('click', () => {
+    const url = urlInput.value.trim();
+    if (!url) { urlStatus.textContent = 'Podaj URL.'; return; }
+    try { new URL(url); } catch (_) { urlStatus.textContent = 'Nieprawidłowy URL.'; return; }
+    socket.emit('admin:load-url', { password: adminPassword, url });
+    loadVideoForAdmin(url, true);
+    urlStatus.textContent = '✓ Załadowano z URL!';
+    if (!loadedFilenames.includes(url)) {
+      loadedFilenames.push(url);
+      renderLibrary();
+    }
+  });
+
   // ── Library ───────────────────────────────────────────────────────────────────
 
   function renderLibrary() {
@@ -196,11 +215,12 @@
     libraryList.innerHTML = '';
 
     loadedFilenames.forEach((fn) => {
+      const isExternal = fn.startsWith('http://') || fn.startsWith('https://');
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:.75rem;';
 
       const name = document.createElement('span');
-      name.textContent = fn;
+      name.textContent = isExternal ? '🔗 ' + fn : fn;
       name.style.cssText = 'flex:1;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
 
       const btn = document.createElement('button');
@@ -208,8 +228,12 @@
       btn.textContent = '▶ Odtwórz';
       btn.style.flexShrink = '0';
       btn.addEventListener('click', () => {
-        socket.emit('admin:load', { password: adminPassword, filename: fn });
-        loadVideoForAdmin(fn);
+        if (isExternal) {
+          socket.emit('admin:load-url', { password: adminPassword, url: fn });
+        } else {
+          socket.emit('admin:load', { password: adminPassword, filename: fn });
+        }
+        loadVideoForAdmin(fn, isExternal);
       });
 
       row.appendChild(name);
@@ -220,10 +244,14 @@
 
   // ── Player ────────────────────────────────────────────────────────────────────
 
-  function loadVideoForAdmin(filename) {
-    const encodedName = encodeURIComponent(filename);
-    if (!player.src.endsWith(encodedName)) {
-      player.src = `/uploads/${encodedName}`;
+  function loadVideoForAdmin(filename, isExternal) {
+    // Only allow http/https for external URLs
+    if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) return;
+    const src = isExternal ? filename : `/uploads/${encodeURIComponent(filename)}`;
+    const currentSrc = player.src; // absolute URL
+    const alreadyLoaded = isExternal ? currentSrc === src : currentSrc.endsWith(encodeURIComponent(filename));
+    if (!alreadyLoaded) {
+      player.src = src;
       player.load();
       placeholder.classList.add('hidden');
     }
@@ -277,7 +305,7 @@
 
   function updatePlayerState(state) {
     if (!state.filename) return;
-    loadVideoForAdmin(state.filename);
+    loadVideoForAdmin(state.filename, !!state.isExternal);
     ignoreSeeked = true;
     if (state.playing) {
       const lag = (Date.now() - state.serverTime) / 1000;

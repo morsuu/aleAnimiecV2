@@ -76,9 +76,16 @@
 
   // ── Video load ───────────────────────────────────────────────────────────────
 
-  function loadVideo(filename) {
-    const src = `/uploads/${encodeURIComponent(filename)}`;
-    if (!player.src.endsWith(encodeURIComponent(filename))) {
+  function loadVideo(filename, isExternal) {
+    // Only allow http/https for external URLs
+    if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) {
+      return Promise.resolve();
+    }
+    const src = isExternal ? filename : `/uploads/${encodeURIComponent(filename)}`;
+    const alreadyLoaded = isExternal
+      ? player.src === src
+      : player.src.endsWith(encodeURIComponent(filename));
+    if (!alreadyLoaded) {
       player.src = src;
       placeholder.classList.add('hidden');
       return new Promise((resolve) => {
@@ -117,7 +124,7 @@
       return;
     }
 
-    await loadVideo(state.filename);
+    await loadVideo(state.filename, !!state.isExternal);
 
     const target = state.playing
       ? state.currentTime + (serverNow() - state.serverTime) / 1000
@@ -178,10 +185,13 @@
     applyState(state);
   });
 
-  socket.on('video:loaded', ({ filename }) => {
-    const encodedName = encodeURIComponent(filename);
-    if (!player.src.endsWith(encodedName)) {
-      player.src = `/uploads/${encodedName}`;
+  socket.on('video:loaded', ({ filename, isExternal }) => {
+    const src = isExternal ? filename : `/uploads/${encodeURIComponent(filename)}`;
+    const alreadyLoaded = isExternal
+      ? player.src === src
+      : player.src.endsWith(encodeURIComponent(filename));
+    if (!alreadyLoaded) {
+      player.src = src;
       placeholder.classList.add('hidden');
       player.pause();
       player.currentTime = 0;

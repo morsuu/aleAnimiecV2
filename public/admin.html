@@ -64,6 +64,19 @@
     </div>
   </div>
 
+  <!-- URL CARD -->
+  <div class="card mt-2">
+    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Załaduj z linku</h2>
+    <div class="form-group">
+      <label for="url-input">URL do pliku video</label>
+      <input type="url" id="url-input" placeholder="https://example.com/video.mp4" style="width:100%" />
+    </div>
+    <div class="mt-2" style="display:flex;align-items:center;gap:.75rem">
+      <button class="btn btn-primary" id="url-load-btn">🔗 Załaduj z URL</button>
+      <span class="text-sm text-muted" id="url-status"></span>
+    </div>
+  </div>
+
   <!-- VIDEO LIBRARY CARD -->
   <div class="card mt-2" id="library-card" style="display:none">
     <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Wgrane filmy</h2>
