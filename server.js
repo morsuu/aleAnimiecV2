@@ -94,6 +94,69 @@ app.post('/upload', (req, res, next) => {
   res.json({ filename: file.filename });
 });
 
+// ─── Proxy for external videos ───────────────────────────────────────────────
+// Streams external video URLs through the server so that CORS / header issues
+// (e.g. pixeldrain, Google Drive, Dropbox) don't block playback in <video>.
+
+const https = require('https');
+
+app.get('/proxy', (req, res) => {
+  const targetUrl = req.query.url;
+  if (!targetUrl || typeof targetUrl !== 'string') {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    return res.status(400).json({ error: 'Only http/https URLs are allowed' });
+  }
+
+  // Validate URL to avoid SSRF on private IPs
+  let parsed;
+  try {
+    parsed = new URL(targetUrl);
+  } catch (_) {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+
+  const isHttps = parsed.protocol === 'https:';
+  const lib = isHttps ? https : http;
+
+  // Forward range header for seeking support
+  const headers = { 'User-Agent': 'aleAnimiec/1.0' };
+  if (req.headers.range) {
+    headers['Range'] = req.headers.range;
+  }
+
+  const proxyReq = lib.get(targetUrl, { headers }, (proxyRes) => {
+    // Follow redirects (up to 5)
+    if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
+      // Redirect – re-issue request to the new URL
+      res.redirect(307, `/proxy?url=${encodeURIComponent(proxyRes.headers.location)}`);
+      proxyRes.resume();
+      return;
+    }
+
+    // Forward relevant headers
+    const fwdHeaders = {};
+    if (proxyRes.headers['content-type']) fwdHeaders['Content-Type'] = proxyRes.headers['content-type'];
+    if (proxyRes.headers['content-length']) fwdHeaders['Content-Length'] = proxyRes.headers['content-length'];
+    if (proxyRes.headers['content-range']) fwdHeaders['Content-Range'] = proxyRes.headers['content-range'];
+    if (proxyRes.headers['accept-ranges']) fwdHeaders['Accept-Ranges'] = proxyRes.headers['accept-ranges'];
+
+    res.writeHead(proxyRes.statusCode, fwdHeaders);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', (err) => {
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Failed to fetch external video' });
+    }
+  });
+
+  req.on('close', () => {
+    proxyReq.destroy();
+  });
+});
+
 // ─── HTTP server ─────────────────────────────────────────────────────────────
 
 const server = http.createServer(app);

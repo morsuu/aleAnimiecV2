@@ -81,9 +81,9 @@
     if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) {
       return Promise.resolve();
     }
-    const src = isExternal ? filename : `/uploads/${encodeURIComponent(filename)}`;
+    const src = isExternal ? `/proxy?url=${encodeURIComponent(filename)}` : `/uploads/${encodeURIComponent(filename)}`;
     const alreadyLoaded = isExternal
-      ? player.src === src
+      ? player.src.includes(encodeURIComponent(filename))
       : player.src.endsWith(encodeURIComponent(filename));
     if (!alreadyLoaded) {
       player.src = src;
@@ -186,9 +186,9 @@
   });
 
   socket.on('video:loaded', ({ filename, isExternal }) => {
-    const src = isExternal ? filename : `/uploads/${encodeURIComponent(filename)}`;
+    const src = isExternal ? `/proxy?url=${encodeURIComponent(filename)}` : `/uploads/${encodeURIComponent(filename)}`;
     const alreadyLoaded = isExternal
-      ? player.src === src
+      ? player.src.includes(encodeURIComponent(filename))
       : player.src.endsWith(encodeURIComponent(filename));
     if (!alreadyLoaded) {
       player.src = src;

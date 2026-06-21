@@ -247,9 +247,9 @@
   function loadVideoForAdmin(filename, isExternal) {
     // Only allow http/https for external URLs
     if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) return;
-    const src = isExternal ? filename : `/uploads/${encodeURIComponent(filename)}`;
+    const src = isExternal ? `/proxy?url=${encodeURIComponent(filename)}` : `/uploads/${encodeURIComponent(filename)}`;
     const currentSrc = player.src; // absolute URL
-    const alreadyLoaded = isExternal ? currentSrc === src : currentSrc.endsWith(encodeURIComponent(filename));
+    const alreadyLoaded = isExternal ? currentSrc.includes(encodeURIComponent(filename)) : currentSrc.endsWith(encodeURIComponent(filename));
     if (!alreadyLoaded) {
       player.src = src;
       player.load();
