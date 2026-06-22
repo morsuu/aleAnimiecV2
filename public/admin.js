@@ -128,18 +128,23 @@
 
   // ── Embed helpers ─────────────────────────────────────────────────────────────
 
-  function toEmbedUrl(url) {
+  function extractYouTubeId(url) {
     try {
       const u = new URL(url);
       if (u.hostname === 'www.youtube.com' || u.hostname === 'youtube.com' || u.hostname === 'youtu.be' || u.hostname === 'm.youtube.com') {
-        let vid = null;
-        if (u.hostname === 'youtu.be') vid = u.pathname.slice(1);
-        else if (u.pathname.startsWith('/watch')) vid = u.searchParams.get('v');
-        else if (u.pathname.startsWith('/shorts/')) vid = u.pathname.split('/shorts/')[1].split('/')[0];
-        else if (u.pathname.startsWith('/live/')) vid = u.pathname.split('/live/')[1].split('/')[0];
-        else if (u.pathname.startsWith('/embed/')) return url;
-        if (vid) return `https://www.youtube.com/embed/${vid}?autoplay=1`;
+        if (u.hostname === 'youtu.be') return u.pathname.slice(1);
+        if (u.pathname.startsWith('/watch')) return u.searchParams.get('v');
+        if (u.pathname.startsWith('/shorts/')) return u.pathname.split('/shorts/')[1].split('/')[0];
+        if (u.pathname.startsWith('/live/')) return u.pathname.split('/live/')[1].split('/')[0];
+        if (u.pathname.startsWith('/embed/')) return u.pathname.split('/embed/')[1].split('?')[0];
       }
+    } catch (_) {}
+    return null;
+  }
+
+  function toTwitchEmbedUrl(url) {
+    try {
+      const u = new URL(url);
       if (u.hostname === 'www.twitch.tv' || u.hostname === 'twitch.tv' || u.hostname === 'm.twitch.tv') {
         if (u.pathname.startsWith('/videos/')) {
           const videoId = u.pathname.split('/videos/')[1];
@@ -148,28 +153,112 @@
         const channel = u.pathname.replace(/^\//, '').split('/')[0];
         if (channel) return `https://player.twitch.tv/?channel=${channel}&parent=${location.hostname}&autoplay=true`;
       }
-      return url;
-    } catch (_) { return url; }
+    } catch (_) {}
+    return null;
   }
 
   let isEmbedMode = false;
+  let ytPlayer = null;
+  let ytReady = false;
+  let ytVideoId = null;
+
+  // YouTube IFrame API ready callback
+  window.onYouTubeIframeAPIReady = window.onYouTubeIframeAPIReady || function() {};
+  const origYTCallback = window.onYouTubeIframeAPIReady;
+  window.onYouTubeIframeAPIReady = function() {
+    origYTCallback();
+    ytReady = true;
+  };
+  if (window.YT && window.YT.Player) {
+    ytReady = true;
+  }
+
+  function createYTPlayerAdmin(videoId) {
+    ytVideoId = videoId;
+    embedPlayer.innerHTML = '';
+    embedPlayer.classList.remove('hidden');
+    const playerDiv = document.createElement('div');
+    playerDiv.id = 'yt-player-admin';
+    embedPlayer.appendChild(playerDiv);
+
+    ytPlayer = new YT.Player('yt-player-admin', {
+      videoId: videoId,
+      width: '100%',
+      height: '100%',
+      playerVars: {
+        autoplay: 0,
+        controls: 1,        // Admin can see controls for reference
+        modestbranding: 1,
+        rel: 0,
+        playsinline: 1,
+      },
+      events: {
+        onStateChange: function(event) {
+          // When admin plays/pauses via YT player, sync to viewers
+          if (!socket) return;
+          const currentTime = ytPlayer.getCurrentTime();
+          if (event.data === YT.PlayerState.PLAYING) {
+            socket.emit('admin:play', { password: adminPassword, currentTime: currentTime });
+            setStateUI(true);
+          } else if (event.data === YT.PlayerState.PAUSED) {
+            socket.emit('admin:pause', { password: adminPassword, currentTime: currentTime });
+            setStateUI(false);
+          }
+        },
+      },
+    });
+  }
 
   function showEmbed(url) {
     isEmbedMode = true;
     player.classList.add('hidden');
     player.pause();
-    embedPlayer.classList.remove('hidden');
-    embedPlayer.src = toEmbedUrl(url);
     placeholder.classList.add('hidden');
-    // Hide standard playback controls for embeds
-    playbackControls.style.display = 'none';
+
+    const ytId = extractYouTubeId(url);
+    if (ytId) {
+      if (ytReady) {
+        if (ytVideoId !== ytId) {
+          createYTPlayerAdmin(ytId);
+        }
+      } else {
+        const waitForYT = setInterval(() => {
+          if (ytReady || (window.YT && window.YT.Player)) {
+            ytReady = true;
+            clearInterval(waitForYT);
+            createYTPlayerAdmin(ytId);
+          }
+        }, 100);
+      }
+      // Show playback controls for admin YouTube sync
+      playbackControls.style.removeProperty('display');
+      playbackControls.style.display = 'flex';
+    } else {
+      // Non-YouTube embed (Twitch, etc.)
+      const twitchUrl = toTwitchEmbedUrl(url);
+      const embedUrl = twitchUrl || url;
+      embedPlayer.innerHTML = '';
+      embedPlayer.classList.remove('hidden');
+      const iframe = document.createElement('iframe');
+      iframe.src = embedUrl;
+      iframe.allowFullscreen = true;
+      iframe.allow = 'autoplay; encrypted-media; fullscreen';
+      iframe.style.cssText = 'width:100%;height:100%;border:none;';
+      embedPlayer.appendChild(iframe);
+      ytPlayer = null;
+      ytVideoId = null;
+      // Hide standard playback controls for non-YT embeds
+      playbackControls.style.display = 'none';
+    }
   }
 
   function showVideo() {
     isEmbedMode = false;
     embedPlayer.classList.add('hidden');
-    embedPlayer.src = '';
+    embedPlayer.innerHTML = '';
     player.classList.remove('hidden');
+    ytPlayer = null;
+    ytVideoId = null;
   }
 
   // ── Login flow ────────────────────────────────────────────────────────────────
@@ -412,22 +501,41 @@
   }
 
   btnPlay.addEventListener('click', () => {
-    player.play();
-    socket.emit('admin:play', { password: adminPassword, currentTime: player.currentTime });
+    if (isEmbedMode && ytPlayer && ytPlayer.playVideo) {
+      ytPlayer.playVideo();
+      const currentTime = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
+      socket.emit('admin:play', { password: adminPassword, currentTime: currentTime });
+    } else {
+      player.play();
+      socket.emit('admin:play', { password: adminPassword, currentTime: player.currentTime });
+    }
     setStateUI(true);
   });
 
   btnPause.addEventListener('click', () => {
-    player.pause();
-    socket.emit('admin:pause', { password: adminPassword, currentTime: player.currentTime });
+    if (isEmbedMode && ytPlayer && ytPlayer.pauseVideo) {
+      ytPlayer.pauseVideo();
+      const currentTime = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
+      socket.emit('admin:pause', { password: adminPassword, currentTime: currentTime });
+    } else {
+      player.pause();
+      socket.emit('admin:pause', { password: adminPassword, currentTime: player.currentTime });
+    }
     setStateUI(false);
   });
 
   btnRestart.addEventListener('click', () => {
-    player.pause();
-    player.currentTime = 0;
-    socket.emit('admin:seek',  { password: adminPassword, currentTime: 0 });
-    socket.emit('admin:pause', { password: adminPassword, currentTime: 0 });
+    if (isEmbedMode && ytPlayer && ytPlayer.seekTo) {
+      ytPlayer.pauseVideo();
+      ytPlayer.seekTo(0, true);
+      socket.emit('admin:seek',  { password: adminPassword, currentTime: 0 });
+      socket.emit('admin:pause', { password: adminPassword, currentTime: 0 });
+    } else {
+      player.pause();
+      player.currentTime = 0;
+      socket.emit('admin:seek',  { password: adminPassword, currentTime: 0 });
+      socket.emit('admin:pause', { password: adminPassword, currentTime: 0 });
+    }
     setStateUI(false);
   });
 
@@ -457,7 +565,25 @@
   function updatePlayerState(state) {
     if (!state.filename) return;
     if (state.isEmbed) {
-      showEmbed(state.filename);
+      if (!isEmbedMode) showEmbed(state.filename);
+      // Sync YouTube player for admin if another admin changed state
+      if (ytPlayer && ytPlayer.seekTo) {
+        const target = state.playing
+          ? state.currentTime + (Date.now() - state.serverTime) / 1000
+          : state.currentTime;
+        const current = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
+        if (Math.abs(current - target) > 2) {
+          ytPlayer.seekTo(target, true);
+        }
+        if (state.playing) {
+          const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+          if (playerState !== YT.PlayerState.PLAYING) ytPlayer.playVideo();
+        } else {
+          const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+          if (playerState === YT.PlayerState.PLAYING) ytPlayer.pauseVideo();
+        }
+      }
+      setStateUI(state.playing);
       return;
     }
     loadVideoForAdmin(state.filename, !!state.isExternal);

@@ -22,7 +22,7 @@
 <div class="container">
   <div class="video-wrap mt-2" id="video-wrap">
     <video id="player" preload="auto"></video>
-    <iframe id="embed-player" class="hidden" allowfullscreen allow="autoplay; encrypted-media; fullscreen"></iframe>
+    <div id="embed-player" class="hidden"></div>
     <div class="video-placeholder" id="placeholder">
       <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
         <path d="M4 2l16 10L4 22V2z"/>
@@ -77,6 +77,7 @@
 </div>
 
 <script src="/config.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
 <script>
   // Load socket.io client from backend when BACKEND_URL is set, otherwise local
   (function() {
