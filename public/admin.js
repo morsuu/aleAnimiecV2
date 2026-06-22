@@ -266,8 +266,8 @@
     socket.emit('admin:load-url', { password: adminPassword, url });
     loadVideoForAdmin(url, true);
     urlStatus.textContent = '✓ Załadowano z URL!';
-    if (!loadedFilenames.includes(url)) {
-      loadedFilenames.push(url);
+    if (!loadedFilenames.some(f => f.name === url)) {
+      loadedFilenames.push({ name: url, isEmbed: false });
       renderLibrary();
     }
   });
@@ -281,8 +281,8 @@
     socket.emit('admin:load-embed', { password: adminPassword, url });
     showEmbed(url);
     embedStatus.textContent = '✓ Osadzono!';
-    if (!loadedFilenames.includes(url)) {
-      loadedFilenames.push(url);
+    if (!loadedFilenames.some(f => f.name === url)) {
+      loadedFilenames.push({ name: url, isEmbed: true });
       renderLibrary();
     }
   });
@@ -297,13 +297,15 @@
     libraryCard.style.display = 'block';
     libraryList.innerHTML = '';
 
-    loadedFilenames.forEach((fn) => {
-      const isExternal = fn.startsWith('http://') || fn.startsWith('https://');
+    loadedFilenames.forEach((entry) => {
+      const filename = entry.name;
+      const isEmbed = !!entry.isEmbed;
+      const isExternal = filename.startsWith('http://') || filename.startsWith('https://');
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:.75rem;';
 
       const name = document.createElement('span');
-      name.textContent = isExternal ? '🔗 ' + fn : fn;
+      name.textContent = isEmbed ? '📺 ' + filename : isExternal ? '🔗 ' + filename : filename;
       name.style.cssText = 'flex:1;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
 
       const btn = document.createElement('button');
@@ -311,12 +313,16 @@
       btn.textContent = '▶ Odtwórz';
       btn.style.flexShrink = '0';
       btn.addEventListener('click', () => {
-        if (isExternal) {
-          socket.emit('admin:load-url', { password: adminPassword, url: fn });
+        if (isEmbed) {
+          socket.emit('admin:load-embed', { password: adminPassword, url: filename });
+          showEmbed(filename);
+        } else if (isExternal) {
+          socket.emit('admin:load-url', { password: adminPassword, url: filename });
+          loadVideoForAdmin(filename, true);
         } else {
-          socket.emit('admin:load', { password: adminPassword, filename: fn });
+          socket.emit('admin:load', { password: adminPassword, filename: filename });
+          loadVideoForAdmin(filename, false);
         }
-        loadVideoForAdmin(fn, isExternal);
       });
 
       row.appendChild(name);
