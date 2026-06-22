@@ -98,31 +98,28 @@
   // ── Embed helpers ──────────────────────────────────────────────────────────
 
   /**
-   * Convert a YouTube / Twitch URL into an embeddable iframe URL.
-   * Returns null if the URL is not a recognised embed-able service.
+   * Extract YouTube video ID from a URL. Returns null if not a YouTube URL.
    */
-  function toEmbedUrl(url) {
+  function extractYouTubeId(url) {
     try {
       const u = new URL(url);
-
-      // YouTube: youtube.com/watch?v=ID | youtu.be/ID | youtube.com/live/ID
       if (u.hostname === 'www.youtube.com' || u.hostname === 'youtube.com' || u.hostname === 'youtu.be' || u.hostname === 'm.youtube.com') {
-        let vid = null;
-        if (u.hostname === 'youtu.be') {
-          vid = u.pathname.slice(1);
-        } else if (u.pathname.startsWith('/watch')) {
-          vid = u.searchParams.get('v');
-        } else if (u.pathname.startsWith('/shorts/')) {
-          vid = u.pathname.split('/shorts/')[1].split('/')[0];
-        } else if (u.pathname.startsWith('/live/')) {
-          vid = u.pathname.split('/live/')[1].split('/')[0];
-        } else if (u.pathname.startsWith('/embed/')) {
-          return url; // already embed
-        }
-        if (vid) return `https://www.youtube.com/embed/${vid}?autoplay=1`;
+        if (u.hostname === 'youtu.be') return u.pathname.slice(1);
+        if (u.pathname.startsWith('/watch')) return u.searchParams.get('v');
+        if (u.pathname.startsWith('/shorts/')) return u.pathname.split('/shorts/')[1].split('/')[0];
+        if (u.pathname.startsWith('/live/')) return u.pathname.split('/live/')[1].split('/')[0];
+        if (u.pathname.startsWith('/embed/')) return u.pathname.split('/embed/')[1].split('?')[0];
       }
+    } catch (_) {}
+    return null;
+  }
 
-      // Twitch: twitch.tv/CHANNEL | twitch.tv/videos/ID
+  /**
+   * Convert a Twitch URL into an embeddable iframe URL.
+   */
+  function toTwitchEmbedUrl(url) {
+    try {
+      const u = new URL(url);
       if (u.hostname === 'www.twitch.tv' || u.hostname === 'twitch.tv' || u.hostname === 'm.twitch.tv') {
         if (u.pathname.startsWith('/videos/')) {
           const videoId = u.pathname.split('/videos/')[1];
@@ -133,31 +130,139 @@
           return `https://player.twitch.tv/?channel=${channel}&parent=${location.hostname}&autoplay=true`;
         }
       }
-
-      // Fallback: return url as-is (let iframe try)
-      return url;
-    } catch (_) {
-      return url;
-    }
+    } catch (_) {}
+    return null;
   }
 
   let isEmbedMode = false;
+  let ytPlayer = null;
+  let ytReady = false;
+  let ytVideoId = null;
+
+  // YouTube IFrame API ready callback
+  window.onYouTubeIframeAPIReady = window.onYouTubeIframeAPIReady || function() {};
+  const origYTCallback = window.onYouTubeIframeAPIReady;
+  window.onYouTubeIframeAPIReady = function() {
+    origYTCallback();
+    ytReady = true;
+  };
+
+  // If API already loaded
+  if (window.YT && window.YT.Player) {
+    ytReady = true;
+  }
+
+  function createYTPlayer(videoId, startTime) {
+    ytVideoId = videoId;
+    embedPlayer.innerHTML = '';
+    embedPlayer.classList.remove('hidden');
+    embedPlayer.classList.add('no-interact');
+    const playerDiv = document.createElement('div');
+    playerDiv.id = 'yt-player-viewer';
+    embedPlayer.appendChild(playerDiv);
+
+    ytPlayer = new YT.Player('yt-player-viewer', {
+      videoId: videoId,
+      width: '100%',
+      height: '100%',
+      playerVars: {
+        autoplay: 0,
+        controls: 0,        // Hide controls
+        disablekb: 1,       // Disable keyboard
+        modestbranding: 1,
+        rel: 0,
+        fs: 0,              // Disable fullscreen button
+        iv_load_policy: 3,  // Disable annotations
+        playsinline: 1,
+        start: Math.floor(startTime || 0),
+      },
+      events: {
+        onReady: function() {
+          // Apply current state once player is ready
+          if (lastState && lastState.isEmbed) {
+            applyYTState(lastState);
+          }
+        },
+      },
+    });
+  }
+
+  function applyYTState(state) {
+    if (!ytPlayer || !ytPlayer.seekTo) return;
+
+    const target = state.playing
+      ? state.currentTime + (serverNow() - state.serverTime) / 1000
+      : state.currentTime;
+
+    const currentYTTime = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
+    const drift = Math.abs(currentYTTime - target);
+
+    if (drift > 2) {
+      ytPlayer.seekTo(target, true);
+    }
+
+    if (state.playing) {
+      const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+      if (playerState !== YT.PlayerState.PLAYING) {
+        ytPlayer.playVideo();
+      }
+    } else {
+      const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+      if (playerState === YT.PlayerState.PLAYING) {
+        ytPlayer.pauseVideo();
+      }
+      ytPlayer.seekTo(target, true);
+    }
+  }
 
   function showEmbed(url) {
     isEmbedMode = true;
-    const embedUrl = toEmbedUrl(url);
     player.classList.add('hidden');
     player.pause();
-    embedPlayer.classList.remove('hidden');
-    embedPlayer.src = embedUrl;
     placeholder.classList.add('hidden');
+
+    const ytId = extractYouTubeId(url);
+    if (ytId) {
+      // Use YouTube IFrame Player API
+      if (ytReady) {
+        if (ytVideoId !== ytId) {
+          createYTPlayer(ytId, 0);
+        }
+      } else {
+        // Wait for API to load
+        const waitForYT = setInterval(() => {
+          if (ytReady || (window.YT && window.YT.Player)) {
+            ytReady = true;
+            clearInterval(waitForYT);
+            createYTPlayer(ytId, 0);
+          }
+        }, 100);
+      }
+    } else {
+      // Non-YouTube embed (e.g., Twitch) – use iframe fallback
+      const twitchUrl = toTwitchEmbedUrl(url);
+      const embedUrl = twitchUrl || url;
+      embedPlayer.innerHTML = '';
+      embedPlayer.classList.remove('hidden');
+      const iframe = document.createElement('iframe');
+      iframe.src = embedUrl;
+      iframe.allowFullscreen = true;
+      iframe.allow = 'autoplay; encrypted-media; fullscreen';
+      iframe.style.cssText = 'width:100%;height:100%;border:none;';
+      embedPlayer.appendChild(iframe);
+      ytPlayer = null;
+      ytVideoId = null;
+    }
   }
 
   function showVideo() {
     isEmbedMode = false;
     embedPlayer.classList.add('hidden');
-    embedPlayer.src = '';
+    embedPlayer.classList.remove('no-interact');
+    embedPlayer.innerHTML = '';
     player.classList.remove('hidden');
+    ytPlayer = null;
+    ytVideoId = null;
   }
 
   // ── Socket ──────────────────────────────────────────────────────────────────
@@ -266,7 +371,11 @@
 
     // Embed mode (YouTube, Twitch, etc.)
     if (state.isEmbed) {
-      showEmbed(state.filename);
+      if (!isEmbedMode) showEmbed(state.filename);
+      const ytId = extractYouTubeId(state.filename);
+      if (ytId && ytPlayer && ytPlayer.seekTo) {
+        applyYTState(state);
+      }
       setSyncStatus('synced');
       return;
     }
@@ -301,7 +410,29 @@
   // ── Continuous drift correction (every 500ms) ───────────────────────────────
 
   setInterval(() => {
-    if (!lastState || !lastState.playing || !lastState.filename) {
+    if (!lastState || !lastState.filename) {
+      player.playbackRate = 1.0;
+      return;
+    }
+
+    // YouTube embed sync
+    if (lastState.isEmbed && ytPlayer && ytPlayer.getCurrentTime && ytPlayer.seekTo) {
+      if (lastState.playing) {
+        const target = lastState.currentTime + (serverNow() - lastState.serverTime) / 1000;
+        const current = ytPlayer.getCurrentTime();
+        const drift = Math.abs(current - target);
+        if (drift > 2) {
+          ytPlayer.seekTo(target, true);
+        }
+        const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+        if (playerState !== YT.PlayerState.PLAYING && playerState !== YT.PlayerState.BUFFERING) {
+          ytPlayer.playVideo();
+        }
+      }
+      return;
+    }
+
+    if (!lastState.playing) {
       player.playbackRate = 1.0;
       return;
     }
