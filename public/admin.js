@@ -40,6 +40,11 @@
   const embedPlayer    = document.getElementById('embed-player');
   const videoWrap      = document.getElementById('video-wrap');
   const btnFullscreen  = document.getElementById('btn-fullscreen');
+  const videoControls  = document.getElementById('video-controls');
+  const btnMute        = document.getElementById('btn-mute');
+  const volIconOn      = document.getElementById('vol-icon-on');
+  const volIconOff     = document.getElementById('vol-icon-off');
+  const volumeSlider   = document.getElementById('volume-slider');
   const playbackControls = document.getElementById('playback-controls');
   const btnPlay        = document.getElementById('btn-play');
   const btnPause       = document.getElementById('btn-pause');
@@ -52,7 +57,7 @@
   let adminPassword = '';
   let socket        = null;
   let selectedFile  = null;
-  let loadedFilenames = [];
+  let loadedFilenames = []; // { name: string, isEmbed: boolean }[]
 
   const BACKEND = window.BACKEND_URL || '';
 
@@ -66,6 +71,61 @@
     }
   });
 
+  // ── Volume control ──────────────────────────────────────────────────────────
+
+  let savedVolume = 1;
+
+  volumeSlider.addEventListener('input', () => {
+    const vol = parseFloat(volumeSlider.value);
+    player.volume = vol;
+    savedVolume = vol > 0 ? vol : savedVolume;
+    updateVolumeIcon();
+  });
+
+  btnMute.addEventListener('click', () => {
+    if (player.volume > 0) {
+      savedVolume = player.volume;
+      player.volume = 0;
+      volumeSlider.value = 0;
+    } else {
+      player.volume = savedVolume || 1;
+      volumeSlider.value = player.volume;
+    }
+    updateVolumeIcon();
+  });
+
+  function updateVolumeIcon() {
+    if (player.volume === 0) {
+      volIconOn.classList.add('hidden');
+      volIconOff.classList.remove('hidden');
+    } else {
+      volIconOn.classList.remove('hidden');
+      volIconOff.classList.add('hidden');
+    }
+  }
+
+  // ── Auto-hide controls after 3 seconds ──────────────────────────────────────
+
+  let hideTimer = null;
+
+  function showControls() {
+    videoWrap.classList.remove('controls-hidden');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      videoWrap.classList.add('controls-hidden');
+    }, 3000);
+  }
+
+  videoWrap.addEventListener('mousemove', showControls);
+  videoWrap.addEventListener('mouseenter', showControls);
+  videoWrap.addEventListener('mouseleave', () => {
+    clearTimeout(hideTimer);
+    videoWrap.classList.add('controls-hidden');
+  });
+  videoWrap.addEventListener('touchstart', showControls);
+
+  showControls();
+
   // ── Embed helpers ─────────────────────────────────────────────────────────────
 
   function toEmbedUrl(url) {
@@ -75,7 +135,8 @@
         let vid = null;
         if (u.hostname === 'youtu.be') vid = u.pathname.slice(1);
         else if (u.pathname.startsWith('/watch')) vid = u.searchParams.get('v');
-        else if (u.pathname.startsWith('/live/')) vid = u.pathname.split('/live/')[1];
+        else if (u.pathname.startsWith('/shorts/')) vid = u.pathname.split('/shorts/')[1].split('/')[0];
+        else if (u.pathname.startsWith('/live/')) vid = u.pathname.split('/live/')[1].split('/')[0];
         else if (u.pathname.startsWith('/embed/')) return url;
         if (vid) return `https://www.youtube.com/embed/${vid}?autoplay=1`;
       }
@@ -168,8 +229,8 @@
     });
 
     socket.on('video:loaded', ({ filename, isEmbed }) => {
-      if (!loadedFilenames.includes(filename)) {
-        loadedFilenames.push(filename);
+      if (!loadedFilenames.some(f => f.name === filename)) {
+        loadedFilenames.push({ name: filename, isEmbed: !!isEmbed });
         renderLibrary();
       }
       if (isEmbed) {
@@ -238,8 +299,8 @@
         const data = JSON.parse(xhr.responseText);
         uploadStatus.textContent = '✓ Wgrano!';
         selectedFile = null;
-        if (!loadedFilenames.includes(data.filename)) {
-          loadedFilenames.push(data.filename);
+        if (!loadedFilenames.some(f => f.name === data.filename)) {
+          loadedFilenames.push({ name: data.filename, isEmbed: false });
           renderLibrary();
         }
         loadVideoForAdmin(data.filename, false);
@@ -265,8 +326,8 @@
     socket.emit('admin:load-url', { password: adminPassword, url });
     loadVideoForAdmin(url, true);
     urlStatus.textContent = '✓ Załadowano z URL!';
-    if (!loadedFilenames.includes(url)) {
-      loadedFilenames.push(url);
+    if (!loadedFilenames.some(f => f.name === url)) {
+      loadedFilenames.push({ name: url, isEmbed: false });
       renderLibrary();
     }
   });
@@ -280,8 +341,8 @@
     socket.emit('admin:load-embed', { password: adminPassword, url });
     showEmbed(url);
     embedStatus.textContent = '✓ Osadzono!';
-    if (!loadedFilenames.includes(url)) {
-      loadedFilenames.push(url);
+    if (!loadedFilenames.some(f => f.name === url)) {
+      loadedFilenames.push({ name: url, isEmbed: true });
       renderLibrary();
     }
   });
@@ -296,13 +357,15 @@
     libraryCard.style.display = 'block';
     libraryList.innerHTML = '';
 
-    loadedFilenames.forEach((fn) => {
-      const isExternal = fn.startsWith('http://') || fn.startsWith('https://');
+    loadedFilenames.forEach((entry) => {
+      const filename = entry.name;
+      const isEmbed = !!entry.isEmbed;
+      const isExternal = filename.startsWith('http://') || filename.startsWith('https://');
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:.75rem;';
 
       const name = document.createElement('span');
-      name.textContent = isExternal ? '🔗 ' + fn : fn;
+      name.textContent = isEmbed ? '📺 ' + filename : isExternal ? '🔗 ' + filename : filename;
       name.style.cssText = 'flex:1;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
 
       const btn = document.createElement('button');
@@ -310,12 +373,16 @@
       btn.textContent = '▶ Odtwórz';
       btn.style.flexShrink = '0';
       btn.addEventListener('click', () => {
-        if (isExternal) {
-          socket.emit('admin:load-url', { password: adminPassword, url: fn });
+        if (isEmbed) {
+          socket.emit('admin:load-embed', { password: adminPassword, url: filename });
+          showEmbed(filename);
+        } else if (isExternal) {
+          socket.emit('admin:load-url', { password: adminPassword, url: filename });
+          loadVideoForAdmin(filename, true);
         } else {
-          socket.emit('admin:load', { password: adminPassword, filename: fn });
+          socket.emit('admin:load', { password: adminPassword, filename: filename });
+          loadVideoForAdmin(filename, false);
         }
-        loadVideoForAdmin(fn, isExternal);
       });
 
       row.appendChild(name);

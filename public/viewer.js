@@ -7,6 +7,11 @@
   const placeholder = document.getElementById('placeholder');
   const videoWrap   = document.getElementById('video-wrap');
   const btnFullscreen = document.getElementById('btn-fullscreen');
+  const videoControls = document.getElementById('video-controls');
+  const btnMute       = document.getElementById('btn-mute');
+  const volIconOn     = document.getElementById('vol-icon-on');
+  const volIconOff    = document.getElementById('vol-icon-off');
+  const volumeSlider  = document.getElementById('volume-slider');
 
   // connection UI
   const connDot   = document.getElementById('conn-dot');
@@ -34,6 +39,62 @@
     }
   });
 
+  // ── Volume control ─────────────────────────────────────────────────────────
+
+  let savedVolume = 1;
+
+  volumeSlider.addEventListener('input', () => {
+    const vol = parseFloat(volumeSlider.value);
+    player.volume = vol;
+    savedVolume = vol > 0 ? vol : savedVolume;
+    updateVolumeIcon();
+  });
+
+  btnMute.addEventListener('click', () => {
+    if (player.volume > 0) {
+      savedVolume = player.volume;
+      player.volume = 0;
+      volumeSlider.value = 0;
+    } else {
+      player.volume = savedVolume || 1;
+      volumeSlider.value = player.volume;
+    }
+    updateVolumeIcon();
+  });
+
+  function updateVolumeIcon() {
+    if (player.volume === 0) {
+      volIconOn.classList.add('hidden');
+      volIconOff.classList.remove('hidden');
+    } else {
+      volIconOn.classList.remove('hidden');
+      volIconOff.classList.add('hidden');
+    }
+  }
+
+  // ── Auto-hide controls after 3 seconds ─────────────────────────────────────
+
+  let hideTimer = null;
+
+  function showControls() {
+    videoWrap.classList.remove('controls-hidden');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      videoWrap.classList.add('controls-hidden');
+    }, 3000);
+  }
+
+  videoWrap.addEventListener('mousemove', showControls);
+  videoWrap.addEventListener('mouseenter', showControls);
+  videoWrap.addEventListener('mouseleave', () => {
+    clearTimeout(hideTimer);
+    videoWrap.classList.add('controls-hidden');
+  });
+  videoWrap.addEventListener('touchstart', showControls);
+
+  // Start hidden after initial 3s
+  showControls();
+
   // ── Embed helpers ──────────────────────────────────────────────────────────
 
   /**
@@ -51,8 +112,10 @@
           vid = u.pathname.slice(1);
         } else if (u.pathname.startsWith('/watch')) {
           vid = u.searchParams.get('v');
+        } else if (u.pathname.startsWith('/shorts/')) {
+          vid = u.pathname.split('/shorts/')[1].split('/')[0];
         } else if (u.pathname.startsWith('/live/')) {
-          vid = u.pathname.split('/live/')[1];
+          vid = u.pathname.split('/live/')[1].split('/')[0];
         } else if (u.pathname.startsWith('/embed/')) {
           return url; // already embed
         }
