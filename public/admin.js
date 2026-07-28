@@ -35,6 +35,10 @@
   const embedLoadBtn   = document.getElementById('embed-load-btn');
   const embedStatus    = document.getElementById('embed-status');
 
+  const cinebyInput    = document.getElementById('cineby-input');
+  const cinebyLoadBtn  = document.getElementById('cineby-load-btn');
+  const cinebyStatus   = document.getElementById('cineby-status');
+
   const placeholder    = document.getElementById('placeholder');
   const player         = document.getElementById('player');
   const embedPlayer    = document.getElementById('embed-player');
@@ -436,6 +440,21 @@
     }
   });
 
+  // ── Load Cineby ──────────────────────────────────────────────────────────────
+
+  cinebyLoadBtn.addEventListener('click', () => {
+    const url = cinebyInput.value.trim();
+    if (!url) { cinebyStatus.textContent = 'Podaj URL.'; return; }
+    try { new URL(url); } catch (_) { cinebyStatus.textContent = 'Nieprawidłowy URL.'; return; }
+    socket.emit('admin:load-cineby', { password: adminPassword, url });
+    showEmbed(url);
+    cinebyStatus.textContent = '✓ Załadowano Cineby!';
+    if (!loadedFilenames.some(f => f.name === url)) {
+      loadedFilenames.push({ name: url, isEmbed: true, isCineby: true });
+      renderLibrary();
+    }
+  });
+
   // ── Library ───────────────────────────────────────────────────────────────────
 
   function renderLibrary() {
@@ -449,12 +468,13 @@
     loadedFilenames.forEach((entry) => {
       const filename = entry.name;
       const isEmbed = !!entry.isEmbed;
+      const isCineby = !!entry.isCineby;
       const isExternal = filename.startsWith('http://') || filename.startsWith('https://');
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:.75rem;';
 
       const name = document.createElement('span');
-      name.textContent = isEmbed ? '📺 ' + filename : isExternal ? '🔗 ' + filename : filename;
+      name.textContent = isCineby ? '🎬 ' + filename : isEmbed ? '📺 ' + filename : isExternal ? '🔗 ' + filename : filename;
       name.style.cssText = 'flex:1;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
 
       const btn = document.createElement('button');
@@ -462,7 +482,10 @@
       btn.textContent = '▶ Odtwórz';
       btn.style.flexShrink = '0';
       btn.addEventListener('click', () => {
-        if (isEmbed) {
+        if (isCineby) {
+          socket.emit('admin:load-cineby', { password: adminPassword, url: filename });
+          showEmbed(filename);
+        } else if (isEmbed) {
           socket.emit('admin:load-embed', { password: adminPassword, url: filename });
           showEmbed(filename);
         } else if (isExternal) {

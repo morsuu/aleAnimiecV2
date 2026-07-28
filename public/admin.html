@@ -93,6 +93,20 @@
     </div>
   </div>
 
+  <!-- CINEBY CARD -->
+  <div class="card mt-2">
+    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">🎬 Cineby</h2>
+    <div class="form-group">
+      <label for="cineby-input">Link do filmu/serialu na Cineby</label>
+      <input type="url" id="cineby-input" placeholder="https://www.cineby.app/movie/..." style="width:100%" />
+    </div>
+    <p class="text-sm text-muted mt-1">Wklej link do filmu lub serialu z Cineby. Zostanie osadzony w dedykowanym playerze dla widzów.</p>
+    <div class="mt-2" style="display:flex;align-items:center;gap:.75rem">
+      <button class="btn btn-primary" id="cineby-load-btn">🎬 Załaduj Cineby</button>
+      <span class="text-sm text-muted" id="cineby-status"></span>
+    </div>
+  </div>
+
   <!-- VIDEO LIBRARY CARD -->
   <div class="card mt-2" id="library-card" style="display:none">
     <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Wgrane filmy</h2>
