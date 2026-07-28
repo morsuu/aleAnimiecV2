@@ -21,11 +21,12 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
 // ─── Video state ─────────────────────────────────────────────────────────────
 
-/** @type {{ filename: string|null, isExternal: boolean, isEmbed: boolean, playing: boolean, currentTime: number, serverTime: number }} */
+/** @type {{ filename: string|null, isExternal: boolean, isEmbed: boolean, isCineby: boolean, playing: boolean, currentTime: number, serverTime: number }} */
 let videoState = {
   filename: null,
   isExternal: false,
   isEmbed: false,
+  isCineby: false,
   playing: false,
   currentTime: 0,
   serverTime: Date.now(),
@@ -100,12 +101,13 @@ app.post('/upload', (req, res, next) => {
     filename: file.filename,
     isExternal: false,
     isEmbed: false,
+    isCineby: false,
     playing: false,
     currentTime: 0,
     serverTime: Date.now(),
   };
 
-  io.emit('video:loaded', { filename: file.filename, isExternal: false });
+  io.emit('video:loaded', { filename: file.filename, isExternal: false, isCineby: false });
   res.json({ filename: file.filename });
 });
 
@@ -299,11 +301,12 @@ io.on('connection', (socket) => {
       filename,
       isExternal: false,
       isEmbed: false,
+      isCineby: false,
       playing: false,
       currentTime: 0,
       serverTime: Date.now(),
     };
-    io.emit('video:loaded', { filename, isExternal: false, isEmbed: false });
+    io.emit('video:loaded', { filename, isExternal: false, isEmbed: false, isCineby: false });
     io.emit('sync:state', currentState());
   });
 
@@ -316,11 +319,12 @@ io.on('connection', (socket) => {
       filename: url,
       isExternal: true,
       isEmbed: false,
+      isCineby: false,
       playing: false,
       currentTime: 0,
       serverTime: Date.now(),
     };
-    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: false });
+    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: false, isCineby: false });
     io.emit('sync:state', currentState());
   });
 
@@ -332,11 +336,29 @@ io.on('connection', (socket) => {
       filename: url,
       isExternal: true,
       isEmbed: true,
+      isCineby: false,
       playing: false,
       currentTime: 0,
       serverTime: Date.now(),
     };
-    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: true });
+    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: true, isCineby: false });
+    io.emit('sync:state', currentState());
+  });
+
+  socket.on('admin:load-cineby', ({ password, url }) => {
+    if (password !== ADMIN_PASSWORD) return;
+    if (!url || typeof url !== 'string') return;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+    videoState = {
+      filename: url,
+      isExternal: true,
+      isEmbed: true,
+      isCineby: true,
+      playing: false,
+      currentTime: 0,
+      serverTime: Date.now(),
+    };
+    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: true, isCineby: true });
     io.emit('sync:state', currentState());
   });
 });

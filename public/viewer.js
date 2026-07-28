@@ -13,6 +13,7 @@
   const volIconOff    = document.getElementById('vol-icon-off');
   const volumeSlider  = document.getElementById('volume-slider');
 
+
   // connection UI
   const connDot   = document.getElementById('conn-dot');
   const connLabel = document.getElementById('conn-label');
@@ -135,6 +136,7 @@
   }
 
   let isEmbedMode = false;
+  let isCinebyMode = false;
   let ytPlayer = null;
   let ytReady = false;
   let ytVideoId = null;
@@ -217,9 +219,11 @@
 
   function showEmbed(url) {
     isEmbedMode = true;
+    isCinebyMode = false;
     player.classList.add('hidden');
     player.pause();
     placeholder.classList.add('hidden');
+    videoWrap.classList.remove('hidden');
 
     const ytId = extractYouTubeId(url);
     if (ytId) {
@@ -257,12 +261,40 @@
 
   function showVideo() {
     isEmbedMode = false;
+    isCinebyMode = false;
     embedPlayer.classList.add('hidden');
     embedPlayer.classList.remove('no-interact');
     embedPlayer.innerHTML = '';
     player.classList.remove('hidden');
     ytPlayer = null;
     ytVideoId = null;
+    // Show video wrap
+    videoWrap.classList.remove('hidden');
+  }
+
+  /**
+   * Show Cineby embed in embed-player div.
+   */
+  function showCineby(url) {
+    isCinebyMode = true;
+    isEmbedMode = true;
+    // Hide standard players
+    player.classList.add('hidden');
+    player.pause();
+    placeholder.classList.add('hidden');
+    videoWrap.classList.remove('hidden');
+    ytPlayer = null;
+    ytVideoId = null;
+
+    // Show cineby in embed-player div
+    embedPlayer.innerHTML = '';
+    embedPlayer.classList.remove('hidden');
+    const iframe = document.createElement('iframe');
+    iframe.src = url;
+    iframe.allowFullscreen = true;
+    iframe.allow = 'autoplay; encrypted-media; fullscreen';
+    iframe.style.cssText = 'width:100%;height:100%;border:none;';
+    embedPlayer.appendChild(iframe);
   }
 
   // ── Socket ──────────────────────────────────────────────────────────────────
@@ -369,8 +401,16 @@
       return;
     }
 
+    // Cineby mode
+    if (state.isCineby) {
+      if (!isCinebyMode) showCineby(state.filename);
+      setSyncStatus('synced');
+      return;
+    }
+
     // Embed mode (YouTube, Twitch, etc.)
     if (state.isEmbed) {
+      if (isCinebyMode) showVideo();
       if (!isEmbedMode) showEmbed(state.filename);
       const ytId = extractYouTubeId(state.filename);
       if (ytId && ytPlayer && ytPlayer.seekTo) {
@@ -381,7 +421,7 @@
     }
 
     // Normal video mode
-    if (isEmbedMode) showVideo();
+    if (isEmbedMode || isCinebyMode) showVideo();
 
     await loadVideo(state.filename, !!state.isExternal);
 
@@ -466,13 +506,19 @@
     applyState(state);
   });
 
-  socket.on('video:loaded', ({ filename, isExternal, isEmbed }) => {
+  socket.on('video:loaded', ({ filename, isExternal, isEmbed, isCineby }) => {
+    if (isCineby) {
+      showCineby(filename);
+      setSyncStatus('loaded');
+      return;
+    }
     if (isEmbed) {
+      if (isCinebyMode) showVideo();
       showEmbed(filename);
       setSyncStatus('loaded');
       return;
     }
-    if (isEmbedMode) showVideo();
+    if (isEmbedMode || isCinebyMode) showVideo();
     const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
     const alreadyLoaded = isExternal
       ? player.src.includes(encodeURIComponent(filename))
