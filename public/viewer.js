@@ -13,9 +13,6 @@
   const volIconOff    = document.getElementById('vol-icon-off');
   const volumeSlider  = document.getElementById('volume-slider');
 
-  // Cineby
-  const cinebyWrap   = document.getElementById('cineby-wrap');
-  const cinebyPlayer = document.getElementById('cineby-player');
 
   // connection UI
   const connDot   = document.getElementById('conn-dot');
@@ -226,9 +223,6 @@
     player.classList.add('hidden');
     player.pause();
     placeholder.classList.add('hidden');
-    // Hide cineby player when switching to regular embed
-    cinebyWrap.classList.add('hidden');
-    cinebyPlayer.innerHTML = '';
     videoWrap.classList.remove('hidden');
 
     const ytId = extractYouTubeId(url);
@@ -274,15 +268,12 @@
     player.classList.remove('hidden');
     ytPlayer = null;
     ytVideoId = null;
-    // Hide cineby
-    cinebyWrap.classList.add('hidden');
-    cinebyPlayer.innerHTML = '';
     // Show video wrap
     videoWrap.classList.remove('hidden');
   }
 
   /**
-   * Show Cineby embed in dedicated div.
+   * Show Cineby embed in embed-player div.
    */
   function showCineby(url) {
     isCinebyMode = true;
@@ -291,20 +282,19 @@
     player.classList.add('hidden');
     player.pause();
     placeholder.classList.add('hidden');
-    embedPlayer.classList.add('hidden');
-    embedPlayer.innerHTML = '';
-    videoWrap.classList.add('hidden');
+    videoWrap.classList.remove('hidden');
     ytPlayer = null;
     ytVideoId = null;
 
-    // Show cineby dedicated div
-    cinebyWrap.classList.remove('hidden');
-    cinebyPlayer.innerHTML = '';
+    // Show cineby in embed-player div
+    embedPlayer.innerHTML = '';
+    embedPlayer.classList.remove('hidden');
     const iframe = document.createElement('iframe');
     iframe.src = url;
     iframe.allowFullscreen = true;
     iframe.allow = 'autoplay; encrypted-media; fullscreen';
-    cinebyPlayer.appendChild(iframe);
+    iframe.style.cssText = 'width:100%;height:100%;border:none;';
+    embedPlayer.appendChild(iframe);
   }
 
   // ── Socket ──────────────────────────────────────────────────────────────────
