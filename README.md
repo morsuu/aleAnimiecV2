@@ -27,6 +27,11 @@ npm install
 npm start        # lub npm run dev (watch mode)
 ```
 
+Otwórz `http://localhost:3000` (viewer) lub `http://localhost:3000/admin.html` (admin).
+
+`public/config.js` sam wykrywa localhost, więc lokalnie nie trzeba nic w nim zmieniać –
+frontend rozmawia z serwerem, który go wysłał.
+
 ## Testy
 
 ```bash
@@ -36,11 +41,6 @@ npm test
 `node --test`, bez zewnętrznych zależności. Pokrywają konwersję napisów
 (`lib/subtitle-format.js`) i parser WebVTT (`public/subtitles.js`) — od surowych
 bajtów uploadu po gotowe cue, razem z dekodowaniem Windows-1250.
-
-Otwórz `http://localhost:3000` (viewer) lub `http://localhost:3000/admin.html` (admin).
-
-`public/config.js` sam wykrywa localhost, więc lokalnie nie trzeba nic w nim zmieniać –
-frontend rozmawia z serwerem, który go wysłał.
 
 ## Deploy
 
@@ -86,7 +86,6 @@ Vercel nie obsługuje WebSocket na serverless – dlatego backend Socket.io jest
 | `FRONTEND_URL` | Backend | Origin(y) frontendu dla CORS, po przecinku, bez ukośnika na końcu |
 | `ALLOW_ANY_ORIGIN` | Backend | `1` = akceptuj dowolny origin (np. podglądy deployów Vercel) |
 | `MAX_UPLOAD_GB` | Backend | Limit rozmiaru wgrywanego pliku (domyślnie 4) |
-| `TRUST_PROXY` | Backend | Liczba zaufanych proxy przed aplikacją (na Render wykrywane automatycznie) |
 | `BACKEND_URL` | Frontend (`config.js`) | URL backendu dla Socket.io i API |
 
 Gdy `FRONTEND_URL` jest puste, dozwolone są wszystkie originy.
@@ -96,9 +95,8 @@ Gdy `FRONTEND_URL` jest puste, dozwolone są wszystkie originy.
 | Metoda | Ścieżka | Opis |
 |--------|---------|------|
 | `GET` | `/health` | Health check (używany też przez self-ping) |
-| `POST` | `/auth` | Weryfikacja hasła admina; zwraca `maxUploadBytes` |
 | `POST` | `/upload` | Wgranie pliku video (pole `video`) |
-| `GET` | `/videos` | Lista plików w `uploads/` |
+| `GET` | `/videos` | Lista plików w `uploads/` oraz limit rozmiaru uploadu |
 | `DELETE` | `/videos/:name` | Usunięcie pliku z serwera |
 | `POST` | `/subtitles` | Wgranie napisów (pole `subtitle`, .srt lub .vtt) |
 | `GET` | `/subtitles` | Lista wgranych napisów |
@@ -107,28 +105,10 @@ Gdy `FRONTEND_URL` jest puste, dozwolone są wszystkie originy.
 
 Wszystkie poza `/health` i `/proxy` wymagają nagłówka `x-admin-password`.
 
-## Ochrona przed zgadywaniem hasła
-
-Licznik nieudanych prób jest wspólny dla **wszystkich** miejsc, które sprawdzają
-hasło — endpointów HTTP i zdarzeń `admin:*` po sockecie. Limit tylko na `/auth`
-byłby pozorny, bo to samo hasło otwiera `/videos`, `/upload` i `/subtitles`.
-
-- 8 nieudanych prób w oknie 15 minut → blokada na 60 s (odpowiedź `429`
-  z nagłówkiem `Retry-After`, po sockecie `admin:error`).
-- Każda kolejna blokada z rzędu podwaja czas, maksymalnie do 30 minut.
-- Poprawne hasło kasuje historię prób danego adresu.
-- Każda odrzucona próba po HTTP jest dodatkowo opóźniona o 400 ms.
-- Panel admina pokazuje odliczanie i blokuje formularz na czas kary.
-
-Logika siedzi w `lib/rate-limit.js` (zegar wstrzykiwany, więc jest testowalna
-bez czekania) i ma własne testy.
-
-> **Za proxy ustaw `TRUST_PROXY`.** Bez tego wszystkie żądania wyglądają, jakby
-> przychodziły z jednego adresu — cały internet trafia do wspólnego kubełka
-> i jeden atakujący zablokuje prawdziwego admina. Na Render wykrywamy to
-> automatycznie (zmienne `RENDER*`) i ufamy jednemu przeskokowi, co sprawia, że
-> `req.ip` to adres dopisany przez ich edge, a więc nie do podrobienia przez
-> klienta.
+Nie ma osobnego endpointu logowania: ekran w panelu przyjmuje hasło bez
+weryfikacji, a błędne hasło objawia się dopiero tym, że serwer odrzuca komendy
+(biblioteka zostaje pusta, upload wraca z `403`, sterowanie odtwarzaniem nic nie
+robi).
 
 ## Panel admina
 

@@ -14,7 +14,6 @@ const { Server } = require('socket.io');
 const multer = require('multer');
 
 const { normalizeToVtt, looksLikeSubtitles } = require('./lib/subtitle-format');
-const { createAttemptLimiter } = require('./lib/rate-limit');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -66,45 +65,11 @@ function isAdmin(password) {
   return crypto.timingSafeEqual(a, b);
 }
 
-// ── Brute force protection ──
-// The limiter guards every password check, not just /auth: the same password is
-// accepted by /videos, /upload, /subtitles and by the admin socket events, so
-// limiting one endpoint would only move the guessing somewhere else.
-
-const authLimiter = createAttemptLimiter();
-
-/** Small constant delay on a rejected password, to slow online guessing. */
-const AUTH_FAIL_DELAY_MS = 400;
-
-setInterval(() => authLimiter.sweep(), 10 * 60 * 1000).unref();
-
-function lockoutMessage(seconds) {
-  return `Zbyt wiele nieudanych prób. Spróbuj ponownie za ${seconds} s.`;
-}
-
 function requireAdmin(req, res, next) {
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
-
-  const wait = authLimiter.check(ip);
-  if (wait) {
-    res.set('Retry-After', String(wait));
-    return res.status(429).json({ error: lockoutMessage(wait), retryAfter: wait });
+  if (!isAdmin(req.headers['x-admin-password'])) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
-
-  if (isAdmin(req.headers['x-admin-password'])) {
-    authLimiter.succeed(ip);
-    return next();
-  }
-
-  const locked = authLimiter.fail(ip);
-  setTimeout(() => {
-    if (res.writableEnded) return;
-    if (locked) {
-      res.set('Retry-After', String(locked));
-      return res.status(429).json({ error: lockoutMessage(locked), retryAfter: locked });
-    }
-    res.status(403).json({ error: 'Forbidden' });
-  }, AUTH_FAIL_DELAY_MS);
+  next();
 }
 
 // ─── Video state ─────────────────────────────────────────────────────────────
@@ -168,14 +133,6 @@ function setState(patch) {
 
 const app = express();
 
-// Behind Render's proxy every request arrives from the same socket address, so
-// without this the rate limiter would put the whole internet in one bucket and
-// a single attacker could lock out the real admin. Trusting exactly one hop
-// makes req.ip the address Render's edge appended, which a client cannot forge.
-const TRUST_PROXY = process.env.TRUST_PROXY
-  || (process.env.RENDER || process.env.RENDER_EXTERNAL_URL ? '1' : '');
-if (TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? Number(TRUST_PROXY) : TRUST_PROXY);
-
 // ─── CORS (frontend lives on a different origin, e.g. Vercel) ────────────────
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -196,12 +153,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve uploaded videos (dotfiles – including .state.json – stay hidden)
 app.use('/uploads', express.static(UPLOADS_DIR, { dotfiles: 'ignore' }));
-
-// ─── Admin auth check ────────────────────────────────────────────────────────
-// The admin panel used to probe /upload with an empty body to test the password,
-// which meant any 5xx from the server read as "logged in". This is explicit.
-
-app.post('/auth', requireAdmin, (req, res) => res.json({ ok: true, maxUploadBytes: MAX_UPLOAD_BYTES }));
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
@@ -292,7 +243,9 @@ app.get('/videos', requireAdmin, (req, res) => {
         return { name: e.name, size, mtime };
       })
       .sort((a, b) => b.mtime - a.mtime);
-    res.json({ files });
+    // The panel needs the size limit to reject an oversized file before it
+    // starts streaming, and this is the first call it makes after logging in.
+    res.json({ files, maxUploadBytes: MAX_UPLOAD_BYTES });
   });
 });
 
@@ -569,40 +522,6 @@ setInterval(() => {
   }
 }, 3000);
 
-/**
- * Password gate for socket commands, sharing the HTTP limiter's counters so an
- * attacker can't dodge the lockout by switching from fetch() to socket.io.
- */
-function socketIp(socket) {
-  const fwd = socket.handshake.headers['x-forwarded-for'];
-  if (TRUST_PROXY && typeof fwd === 'string' && fwd) {
-    // Rightmost entry is the one our own proxy appended.
-    return fwd.split(',').pop().trim();
-  }
-  return socket.handshake.address || 'unknown';
-}
-
-function adminOk(socket, msg) {
-  if (!msg) return false;
-  const ip = socketIp(socket);
-
-  const wait = authLimiter.check(ip);
-  if (wait) {
-    socket.emit('admin:error', { message: lockoutMessage(wait) });
-    return false;
-  }
-  if (isAdmin(msg.password)) {
-    authLimiter.succeed(ip);
-    return true;
-  }
-
-  const locked = authLimiter.fail(ip);
-  socket.emit('admin:error', {
-    message: locked ? lockoutMessage(locked) : 'Odrzucono: nieprawidłowe hasło admina.',
-  });
-  return false;
-}
-
 io.on('connection', (socket) => {
   broadcastViewerCount();
   socket.on('disconnect', broadcastViewerCount);
@@ -627,25 +546,25 @@ io.on('connection', (socket) => {
   // ── Admin events (password-checked) ──────────────────────────────────────
 
   socket.on('admin:play', (msg) => {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     setState({ playing: true, currentTime: sanitizeTime(msg.currentTime) });
     io.emit('sync:state', currentState());
   });
 
   socket.on('admin:pause', (msg) => {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     setState({ playing: false, currentTime: sanitizeTime(msg.currentTime) });
     io.emit('sync:state', currentState());
   });
 
   socket.on('admin:seek', (msg) => {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     setState({ currentTime: sanitizeTime(msg.currentTime) });
     io.emit('sync:state', currentState());
   });
 
   socket.on('admin:load', (msg) => {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     // Only serve files that actually exist in uploads/
     const full = safeUploadPath(msg.filename);
     if (!full || !fs.existsSync(full)) {
@@ -659,7 +578,7 @@ io.on('connection', (socket) => {
 
   /** Shared handler for the URL-based load events. */
   function loadUrl(msg, isEmbed) {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     const url = msg.url;
     if (!url || typeof url !== 'string') return;
     if (!url.startsWith('http://') && !url.startsWith('https://')) return;
@@ -674,7 +593,7 @@ io.on('connection', (socket) => {
   // ── Subtitles ────────────────────────────────────────────────────────────
 
   socket.on('admin:subtitle', (msg) => {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     if (msg.file === null) {
       setState({ subtitle: null, subtitleOffset: 0 });
     } else {
@@ -689,7 +608,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin:subtitle-offset', (msg) => {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     const raw = Number(msg.offset);
     if (!Number.isFinite(raw)) return;
     const offset = Math.max(-MAX_SUBTITLE_OFFSET, Math.min(MAX_SUBTITLE_OFFSET, raw));
@@ -700,7 +619,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin:clear', (msg) => {
-    if (!adminOk(socket, msg)) return;
+    if (!msg || !isAdmin(msg.password)) return;
     setState({ ...EMPTY_STATE });
     io.emit('video:cleared');
     io.emit('sync:state', currentState());

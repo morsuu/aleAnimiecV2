@@ -5,6 +5,7 @@ services:
     plan: free
     buildCommand: npm install
     startCommand: npm start
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
@@ -12,9 +13,14 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
-    # Uwaga: trwałe dyski wymagają płatnego planu. Na planie `free` ta sekcja
-    # zostanie odrzucona przy walidacji blueprintu – usuń ją albo zmień `plan`.
-    disk:
-      name: uploads
-      mountPath: /opt/render/project/src/uploads
-      sizeGB: 1
+
+# Uwaga: trwałe dyski są dostępne tylko na płatnych planach i blueprint z sekcją
+# `disk:` przy `plan: free` nie przechodzi walidacji. Na free tierze katalog
+# uploads/ i tak jest efemeryczny — znika przy każdym restarcie i deployu.
+#
+# Po przejściu na plan płatny dopisz z powrotem:
+#
+#    disk:
+#      name: uploads
+#      mountPath: /opt/render/project/src/uploads
+#      sizeGB: 1

@@ -97,14 +97,27 @@
 
 <script src="/config.js"></script>
 <script src="https://www.youtube.com/iframe_api"></script>
-<script>
-  // Load socket.io client from backend when BACKEND_URL is set, otherwise local
-  (function() {
-    var src = window.BACKEND_URL ? window.BACKEND_URL + '/socket.io/socket.io.js' : '/socket.io/socket.io.js';
-    document.write('<script src="' + src + '"><\/script>');
-  })();
-</script>
 <script src="/subtitles.js"></script>
-<script src="/viewer.js"></script>
+<script>
+  // The socket.io client lives on the backend, usually a different origin.
+  // Pulling it in with document.write makes it a parser-blocking cross-site
+  // script, which Chrome may refuse to fetch on a slow connection – and a
+  // Render free-tier cold start looks exactly like one. Load it explicitly and
+  // start the app once it either arrived or failed; the app itself reports a
+  // missing server.
+  (function () {
+    var loader = document.createElement('script');
+    loader.src = (window.BACKEND_URL || '') + '/socket.io/socket.io.js';
+    loader.onload = start;
+    loader.onerror = start;
+    document.head.appendChild(loader);
+
+    function start() {
+      var app = document.createElement('script');
+      app.src = '/viewer.js';
+      document.head.appendChild(app);
+    }
+  }());
+</script>
 </body>
 </html>

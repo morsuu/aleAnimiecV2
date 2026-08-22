@@ -85,7 +85,7 @@
   let adminPassword = '';
   let socket        = null;
   let selectedFile  = null;
-  let maxUploadBytes = 0;   // filled in by /auth
+  let maxUploadBytes = 0;   // dostarczany razem z listą w /videos
 
   /** Files that live in uploads/ on the server (fetched from /videos). */
   let serverFiles = [];
@@ -376,99 +376,31 @@
   }
 
   // ── Login flow ────────────────────────────────────────────────────────────────
+  // Hasło nie jest tu weryfikowane – nie ma endpointu, który mógłby to zrobić.
+  // Panel przyjmuje je na słowo i dopiero serwer odrzuca komendy przy złym haśle.
 
   pwSubmit.addEventListener('click', () => attemptLogin(pwInput.value.trim()));
   pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwSubmit.click(); });
 
-  let lockoutTimer = null;
-
-  /** Block the login form for `seconds`, showing the remaining time. */
-  function startLockoutCountdown(seconds) {
-    clearInterval(lockoutTimer);
-    let left = Math.max(1, Math.ceil(seconds));
-    pwSubmit.disabled = true;
-    pwInput.disabled = true;
-
-    const tick = () => {
-      pwError.textContent = `Zbyt wiele nieudanych prób. Spróbuj ponownie za ${left} s.`;
-      if (left <= 0) {
-        clearInterval(lockoutTimer);
-        lockoutTimer = null;          // the `finally` in attemptLogin checks this
-        pwSubmit.disabled = false;
-        pwInput.disabled = false;
-        pwError.textContent = 'Możesz spróbować ponownie.';
-        return;
-      }
-      left -= 1;
-    };
-
-    tick();
-    lockoutTimer = setInterval(tick, 1000);
-  }
-
-  /**
-   * Verify the password against the dedicated /auth endpoint. The old check
-   * posted an empty body to /upload and treated anything that wasn't a 403 as
-   * success, so a 500 or a sleeping backend logged you in with a bad password.
-   */
-  async function attemptLogin(pw, silent) {
+  function attemptLogin(pw) {
     if (!pw) { pwError.textContent = 'Podaj hasło.'; return false; }
-    pwSubmit.disabled = true;
-    if (!silent) pwError.textContent = 'Sprawdzanie…';
 
-    try {
-      const res = await fetch(`${BACKEND}/auth`, {
-        method: 'POST',
-        headers: { 'x-admin-password': pw },
-      });
-
-      if (res.status === 429) {
-        // Locked out by the brute force limiter – count it down instead of
-        // letting the admin hammer a door that won't open.
-        const data = await res.json().catch(() => ({}));
-        const wait = Number(data.retryAfter) || Number(res.headers.get('Retry-After')) || 60;
-        try { sessionStorage.removeItem(PW_KEY); } catch (_) {}
-        startLockoutCountdown(wait);
-        return false;
-      }
-      if (res.status === 403) {
-        pwError.textContent = silent ? '' : 'Złe hasło. Spróbuj ponownie.';
-        try { sessionStorage.removeItem(PW_KEY); } catch (_) {}
-        return false;
-      }
-      if (!res.ok) {
-        pwError.textContent = `Serwer odpowiedział błędem (${res.status}).`;
-        return false;
-      }
-
-      try {
-        const info = await res.json();
-        if (info && info.maxUploadBytes) maxUploadBytes = info.maxUploadBytes;
-      } catch (_) { /* older backend without the field */ }
-
-      adminPassword = pw;
-      try { sessionStorage.setItem(PW_KEY, pw); } catch (_) {}
-      pwError.textContent = '';
-      loginOverlay.style.display = 'none';
-      mainContent.style.display  = 'block';
-      initSocket();
-      refreshLibrary();
-      refreshSubtitles();
-      return true;
-    } catch (_) {
-      pwError.textContent = 'Błąd połączenia z serwerem.';
-      return false;
-    } finally {
-      // Don't undo a lockout that the 429 branch just started.
-      if (!lockoutTimer) pwSubmit.disabled = false;
-    }
+    adminPassword = pw;
+    try { sessionStorage.setItem(PW_KEY, pw); } catch (_) {}
+    pwError.textContent = '';
+    loginOverlay.style.display = 'none';
+    mainContent.style.display  = 'block';
+    initSocket();
+    refreshLibrary();
+    refreshSubtitles();
+    return true;
   }
 
   // Resume the session after a page reload instead of asking again.
   (function autoLogin() {
     let saved = null;
     try { saved = sessionStorage.getItem(PW_KEY); } catch (_) {}
-    if (saved) attemptLogin(saved, true);
+    if (saved) attemptLogin(saved);
   }());
 
   // ── Socket ────────────────────────────────────────────────────────────────────
@@ -855,6 +787,7 @@
       if (!res.ok) return;
       const data = await res.json();
       serverFiles = Array.isArray(data.files) ? data.files : [];
+      if (data.maxUploadBytes) maxUploadBytes = data.maxUploadBytes;
     } catch (_) {
       // keep whatever we had
     }
