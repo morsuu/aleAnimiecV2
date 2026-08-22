@@ -93,23 +93,47 @@
     </div>
   </div>
 
-  <!-- CINEBY CARD -->
+  <!-- SUBTITLES CARD -->
   <div class="card mt-2">
-    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">🎬 Cineby</h2>
-    <div class="form-group">
-      <label for="cineby-input">Link do filmu/serialu na Cineby</label>
-      <input type="url" id="cineby-input" placeholder="https://www.cineby.app/movie/..." style="width:100%" />
+    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">💬 Napisy</h2>
+
+    <div class="drop-zone" id="sub-drop-zone">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="5" width="20" height="14" rx="2"/>
+        <line x1="6" y1="14" x2="11" y2="14"/><line x1="14" y1="14" x2="18" y2="14"/>
+      </svg>
+      <p>Przeciągnij plik <strong style="color:var(--accent)">.srt</strong> lub <strong style="color:var(--accent)">.vtt</strong>, albo kliknij</p>
+      <p id="sub-drop-filename" class="mt-1"></p>
+      <input type="file" id="sub-file-input" accept=".srt,.vtt,text/vtt" style="display:none" />
     </div>
-    <p class="text-sm text-muted mt-1">Wklej link do filmu lub serialu z Cineby. Zostanie osadzony w dedykowanym playerze dla widzów.</p>
-    <div class="mt-2" style="display:flex;align-items:center;gap:.75rem">
-      <button class="btn btn-primary" id="cineby-load-btn">🎬 Załaduj Cineby</button>
-      <span class="text-sm text-muted" id="cineby-status"></span>
+    <p class="text-sm text-muted mt-1">Pliki .srt są konwertowane do WebVTT. Kodowanie Windows-1250 (polskie znaki) jest wykrywane automatycznie.</p>
+    <span class="text-sm text-muted" id="sub-upload-status"></span>
+
+    <!-- offset -->
+    <div class="mt-2 hidden" id="sub-sync-panel">
+      <label class="text-sm text-muted" style="text-transform:uppercase;letter-spacing:.05em">Synchronizacja napisów</label>
+      <div class="sub-offset mt-1">
+        <button class="btn btn-ghost btn-sm" id="sub-offset-minus" title="Napisy wcześniej">−0,5 s</button>
+        <input type="number" id="sub-offset-input" step="0.1" value="0" />
+        <span class="text-sm text-muted">s</span>
+        <button class="btn btn-ghost btn-sm" id="sub-offset-plus" title="Napisy później">+0,5 s</button>
+        <button class="btn btn-ghost btn-sm" id="sub-offset-reset">Zeruj</button>
+      </div>
+      <p class="text-sm text-muted mt-1">
+        Wartość dodatnia = napisy pojawiają się <strong>później</strong>, ujemna = <strong>wcześniej</strong>.
+        Zmiana działa u wszystkich widzów natychmiast, bez przerywania filmu.
+      </p>
     </div>
+
+    <div class="mt-2" id="sub-list" style="display:flex;flex-direction:column;gap:.5rem"></div>
   </div>
 
   <!-- VIDEO LIBRARY CARD -->
-  <div class="card mt-2" id="library-card" style="display:none">
-    <h2 class="text-sm" style="margin-bottom:.85rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Wgrane filmy</h2>
+  <div class="card mt-2 hidden" id="library-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem;gap:1rem">
+      <h2 class="text-sm" style="letter-spacing:.05em;text-transform:uppercase;color:var(--muted)">Biblioteka</h2>
+      <button class="btn btn-ghost btn-sm" id="library-refresh">⟳ Odśwież</button>
+    </div>
     <div id="library-list" style="display:flex;flex-direction:column;gap:.5rem"></div>
   </div>
 
@@ -120,6 +144,7 @@
     <div class="video-wrap" id="video-wrap">
       <video id="player" preload="auto"></video>
       <div id="embed-player" class="hidden"></div>
+      <div class="subtitle-layer hidden" id="subtitle-layer"></div>
       <div class="video-placeholder" id="placeholder">
         <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M4 2l16 10L4 22V2z"/></svg>
         <span>Wgraj i wybierz film powyżej</span>
@@ -138,6 +163,7 @@
           </button>
           <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="1" />
         </div>
+        <button class="btn-fullscreen btn-cc hidden" id="btn-cc" title="Napisy włącz/wyłącz" aria-pressed="true">CC</button>
         <button class="btn-fullscreen" id="btn-fullscreen" title="Pełny ekran">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
@@ -146,11 +172,26 @@
       </div>
     </div>
 
+    <!-- seek bar -->
+    <div class="seek-bar mt-2 hidden" id="seek-bar">
+      <span class="seek-bar__time" id="seek-current">00:00</span>
+      <div class="seek-track" id="seek-track" role="slider" tabindex="0"
+           aria-label="Pozycja w filmie" aria-valuemin="0" aria-valuenow="0">
+        <div class="seek-track__buffered" id="seek-buffered"></div>
+        <div class="seek-track__played" id="seek-played"></div>
+        <div class="seek-track__thumb" id="seek-thumb"></div>
+      </div>
+      <span class="seek-bar__time" id="seek-duration">--:--</span>
+    </div>
+
     <!-- controls -->
-    <div class="mt-2 flex gap-2 flex-wrap items-center" id="playback-controls" style="display:none!important">
+    <div class="mt-2 flex gap-2 flex-wrap items-center hidden" id="playback-controls">
       <button class="btn btn-primary" id="btn-play">▶ Play</button>
       <button class="btn btn-ghost"   id="btn-pause">⏸ Pauza</button>
+      <button class="btn btn-ghost"   id="btn-back10" title="Cofnij 10 sekund">⏪ −10 s</button>
+      <button class="btn btn-ghost"   id="btn-fwd10" title="Przewiń 10 sekund">+10 s ⏩</button>
       <button class="btn btn-ghost"   id="btn-restart">⏮ Od początku</button>
+      <button class="btn btn-ghost"   id="btn-clear" title="Zatrzymaj i wyczyść u wszystkich">⏹ Wyczyść</button>
     </div>
 
     <div class="status-strip mt-1">
@@ -170,6 +211,7 @@
     document.write('<script src="' + src + '"><\/script>');
   })();
 </script>
+<script src="/subtitles.js"></script>
 <script src="/admin.js"></script>
 </body>
 </html>

@@ -12,6 +12,8 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+    # Uwaga: trwałe dyski wymagają płatnego planu. Na planie `free` ta sekcja
+    # zostanie odrzucona przy walidacji blueprintu – usuń ją albo zmień `plan`.
     disk:
       name: uploads
       mountPath: /opt/render/project/src/uploads

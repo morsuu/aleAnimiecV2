@@ -5,6 +5,7 @@
   const player      = document.getElementById('player');
   const embedPlayer = document.getElementById('embed-player');
   const placeholder = document.getElementById('placeholder');
+  const placeholderText = placeholder.querySelector('span');
   const videoWrap   = document.getElementById('video-wrap');
   const btnFullscreen = document.getElementById('btn-fullscreen');
   const videoControls = document.getElementById('video-controls');
@@ -12,11 +13,16 @@
   const volIconOn     = document.getElementById('vol-icon-on');
   const volIconOff    = document.getElementById('vol-icon-off');
   const volumeSlider  = document.getElementById('volume-slider');
-
+  const tapOverlay    = document.getElementById('tap-overlay');
+  const embedFallback = document.getElementById('embed-fallback');
+  const embedFallbackLink = document.getElementById('embed-fallback-link');
+  const subtitleLayer = document.getElementById('subtitle-layer');
+  const btnCc         = document.getElementById('btn-cc');
 
   // connection UI
   const connDot   = document.getElementById('conn-dot');
   const connLabel = document.getElementById('conn-label');
+  const viewersCount = document.getElementById('viewers-count');
 
   // sync UI
   const syncDot   = document.getElementById('sync-dot');
@@ -29,6 +35,18 @@
   const timerDuration = document.getElementById('timer-duration');
   const timerDrift    = document.getElementById('timer-drift');
   const btnResync     = document.getElementById('btn-resync');
+
+  const DEFAULT_PLACEHOLDER = placeholderText ? placeholderText.textContent : '';
+
+  // The socket.io client is injected by a <script> tag pointing at the backend.
+  // If the backend is asleep or unreachable that tag 404s and `io` is undefined,
+  // which used to leave the page silently dead.
+  if (typeof io === 'undefined') {
+    connDot.className = 'dot red';
+    connLabel.textContent = 'Brak serwera';
+    if (placeholderText) placeholderText.textContent = 'Nie można połączyć się z serwerem. Odśwież stronę za chwilę.';
+    return;
+  }
 
   // ── Fullscreen ───────────────────────────────────────────────────────────────
 
@@ -47,24 +65,28 @@
   volumeSlider.addEventListener('input', () => {
     const vol = parseFloat(volumeSlider.value);
     player.volume = vol;
+    // Touching the slider is a user gesture, so it also lifts the mute we may
+    // have applied to get past the autoplay policy.
+    if (vol > 0) player.muted = false;
     savedVolume = vol > 0 ? vol : savedVolume;
     updateVolumeIcon();
   });
 
   btnMute.addEventListener('click', () => {
-    if (player.volume > 0) {
-      savedVolume = player.volume;
-      player.volume = 0;
-      volumeSlider.value = 0;
-    } else {
+    if (player.muted || player.volume === 0) {
+      player.muted = false;
       player.volume = savedVolume || 1;
       volumeSlider.value = player.volume;
+    } else {
+      savedVolume = player.volume;
+      player.muted = true;
+      volumeSlider.value = 0;
     }
     updateVolumeIcon();
   });
 
   function updateVolumeIcon() {
-    if (player.volume === 0) {
+    if (player.muted || player.volume === 0) {
       volIconOn.classList.add('hidden');
       volIconOff.classList.remove('hidden');
     } else {
@@ -72,6 +94,8 @@
       volIconOff.classList.add('hidden');
     }
   }
+
+  player.addEventListener('volumechange', updateVolumeIcon);
 
   // ── Auto-hide controls after 3 seconds ─────────────────────────────────────
 
@@ -95,6 +119,134 @@
 
   // Start hidden after initial 3s
   showControls();
+
+  // ── Autoplay policy ────────────────────────────────────────────────────────
+  // Browsers refuse to start audible playback without a user gesture. Previously
+  // the rejection was swallowed and the viewer sat on a frozen frame while the
+  // status still claimed "zsynchronizowano".
+
+  let autoplayBlocked = false;
+
+  function showTapOverlay() {
+    autoplayBlocked = true;
+    tapOverlay.classList.remove('hidden');
+  }
+
+  function hideTapOverlay() {
+    autoplayBlocked = false;
+    tapOverlay.classList.add('hidden');
+  }
+
+  /** Start playback, falling back to muted playback, then to a tap prompt. */
+  async function ensurePlaying() {
+    try {
+      await player.play();
+      hideTapOverlay();
+      return true;
+    } catch (_) {
+      if (!player.muted) {
+        // Muted autoplay is allowed almost everywhere – take it and tell the
+        // viewer how to get the sound back.
+        player.muted = true;
+        updateVolumeIcon();
+        try {
+          await player.play();
+          showTapOverlay();
+          return true;
+        } catch (__) { /* fall through */ }
+      }
+      showTapOverlay();
+      return false;
+    }
+  }
+
+  tapOverlay.addEventListener('click', () => {
+    player.muted = false;
+    player.volume = savedVolume || 1;
+    volumeSlider.value = player.volume;
+    updateVolumeIcon();
+    hideTapOverlay();
+    if (lastState && lastState.playing) player.play().catch(() => {});
+  });
+
+  // ── Buffering ──────────────────────────────────────────────────────────────
+  // A viewer on a thin connection would just silently fall behind and then get
+  // yanked forward by the drift correction, with the status still claiming
+  // "zsynchronizowano". Say what is actually happening instead.
+
+  let buffering = false;
+
+  function setBuffering(on) {
+    if (buffering === on) return;
+    buffering = on;
+    setSyncStatus(lastStatusKey);   // re-render whatever state we were in
+  }
+
+  player.addEventListener('waiting', () => { if (currentSrcKey) setBuffering(true); });
+  player.addEventListener('stalled', () => { if (currentSrcKey && !player.paused) setBuffering(true); });
+  player.addEventListener('playing', () => setBuffering(false));
+  player.addEventListener('canplay', () => setBuffering(false));
+  player.addEventListener('emptied', () => setBuffering(false));
+
+  // ── Subtitles ──────────────────────────────────────────────────────────────
+  // The admin picks the track and its offset; both arrive in `sync:state`, so
+  // every viewer sees the same lines at the same moment.
+
+  const CC_PREF_KEY = 'aleanimiec.cc';
+  const subs = window.Subtitles.createRenderer(subtitleLayer);
+  let currentSubtitleFile = null;
+
+  try {
+    if (localStorage.getItem(CC_PREF_KEY) === '0') subs.setVisible(false);
+  } catch (_) {}
+
+  function updateCcButton() {
+    btnCc.setAttribute('aria-pressed', subs.isVisible() ? 'true' : 'false');
+    btnCc.title = subs.isVisible() ? 'Wyłącz napisy' : 'Włącz napisy';
+  }
+
+  btnCc.addEventListener('click', () => {
+    subs.setVisible(!subs.isVisible());
+    updateCcButton();
+    try { localStorage.setItem(CC_PREF_KEY, subs.isVisible() ? '1' : '0'); } catch (_) {}
+  });
+
+  /** Fetch and parse the track the admin selected. */
+  async function loadSubtitle(file) {
+    if ((file || null) === currentSubtitleFile) return;
+    currentSubtitleFile = file || null;
+
+    if (!currentSubtitleFile) {
+      subs.clear();
+      btnCc.classList.add('hidden');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${BACKEND}/uploads/${encodeURIComponent(currentSubtitleFile)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const cues = window.Subtitles.parse(await res.text());
+      if (currentSubtitleFile !== file) return;   // a newer track won the race
+      subs.setCues(cues);
+      btnCc.classList.toggle('hidden', cues.length === 0);
+      updateCcButton();
+    } catch (_) {
+      subs.clear();
+      btnCc.classList.add('hidden');
+    }
+  }
+
+  function dropSubtitles() {
+    currentSubtitleFile = null;
+    subs.clear();
+    btnCc.classList.add('hidden');
+  }
+
+  // A timer rather than requestAnimationFrame: rAF is suspended while the tab is
+  // hidden, and 100 ms is well below the threshold where a cue change is visible.
+  setInterval(() => {
+    if (currentSrcKey && !isEmbedMode) subs.update(player.currentTime);
+  }, 100);
 
   // ── Embed helpers ──────────────────────────────────────────────────────────
 
@@ -136,10 +288,11 @@
   }
 
   let isEmbedMode = false;
-  let isCinebyMode = false;
+  let currentEmbedUrl = null;   // so switching to another embed actually reloads
   let ytPlayer = null;
   let ytReady = false;
   let ytVideoId = null;
+  let ytWaitTimer = null;
 
   // YouTube IFrame API ready callback
   window.onYouTubeIframeAPIReady = window.onYouTubeIframeAPIReady || function() {};
@@ -189,6 +342,8 @@
     });
   }
 
+  const YT_DRIFT_THRESHOLD = 2; // seconds
+
   function applyYTState(state) {
     if (!ytPlayer || !ytPlayer.seekTo) return;
 
@@ -198,46 +353,49 @@
 
     const currentYTTime = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
     const drift = Math.abs(currentYTTime - target);
+    const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
 
-    if (drift > 2) {
+    // Seek only when actually off – re-seeking on every 3s heartbeat made the
+    // paused player flicker and re-buffer.
+    if (drift > YT_DRIFT_THRESHOLD) {
       ytPlayer.seekTo(target, true);
     }
 
     if (state.playing) {
-      const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-      if (playerState !== YT.PlayerState.PLAYING) {
+      if (playerState !== YT.PlayerState.PLAYING && playerState !== YT.PlayerState.BUFFERING) {
         ytPlayer.playVideo();
       }
-    } else {
-      const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-      if (playerState === YT.PlayerState.PLAYING) {
-        ytPlayer.pauseVideo();
-      }
-      ytPlayer.seekTo(target, true);
+    } else if (playerState === YT.PlayerState.PLAYING) {
+      ytPlayer.pauseVideo();
     }
   }
 
   function showEmbed(url) {
     isEmbedMode = true;
-    isCinebyMode = false;
+    currentEmbedUrl = url;
+    currentSrcKey = null;
     player.classList.add('hidden');
     player.pause();
+    player.removeAttribute('src');
     placeholder.classList.add('hidden');
+    hideTapOverlay();
     videoWrap.classList.remove('hidden');
+    clearInterval(ytWaitTimer);
 
     const ytId = extractYouTubeId(url);
     if (ytId) {
       // Use YouTube IFrame Player API
-      if (ytReady) {
-        if (ytVideoId !== ytId) {
-          createYTPlayer(ytId, 0);
-        }
+      hideEmbedFallback();
+      if (ytReady || (window.YT && window.YT.Player)) {
+        ytReady = true;
+        if (ytVideoId !== ytId) createYTPlayer(ytId, 0);
       } else {
-        // Wait for API to load
-        const waitForYT = setInterval(() => {
+        // Wait for API to load. Tracked in ytWaitTimer so a second load()
+        // before the API arrives can't spawn a second player.
+        ytWaitTimer = setInterval(() => {
           if (ytReady || (window.YT && window.YT.Player)) {
             ytReady = true;
-            clearInterval(waitForYT);
+            clearInterval(ytWaitTimer);
             createYTPlayer(ytId, 0);
           }
         }, 100);
@@ -245,23 +403,46 @@
     } else {
       // Non-YouTube embed (e.g., Twitch) – use iframe fallback
       const twitchUrl = toTwitchEmbedUrl(url);
-      const embedUrl = twitchUrl || url;
-      embedPlayer.innerHTML = '';
-      embedPlayer.classList.remove('hidden');
-      const iframe = document.createElement('iframe');
-      iframe.src = embedUrl;
-      iframe.allowFullscreen = true;
-      iframe.allow = 'autoplay; encrypted-media; fullscreen';
-      iframe.style.cssText = 'width:100%;height:100%;border:none;';
-      embedPlayer.appendChild(iframe);
+      renderIframe(twitchUrl || url);
+      // Twitch's player URL is made for framing; anything else may be refused.
+      if (twitchUrl) hideEmbedFallback();
+      else showEmbedFallback(url);
       ytPlayer = null;
       ytVideoId = null;
     }
   }
 
+  function renderIframe(src) {
+    embedPlayer.innerHTML = '';
+    embedPlayer.classList.remove('hidden');
+    const iframe = document.createElement('iframe');
+    iframe.src = src;
+    iframe.allowFullscreen = true;
+    iframe.allow = 'autoplay; encrypted-media; fullscreen';
+    iframe.style.cssText = 'width:100%;height:100%;border:none;';
+    embedPlayer.appendChild(iframe);
+  }
+
+  /**
+   * A cross-origin frame that answers with X-Frame-Options / frame-ancestors
+   * renders as an empty black box and there is no event we can catch for it.
+   * Sites that refuse framing are exactly that case, so always offer a way out
+   * instead of leaving the viewer staring at nothing.
+   */
+  function showEmbedFallback(url) {
+    embedFallbackLink.href = url;
+    embedFallback.classList.remove('hidden');
+  }
+
+  function hideEmbedFallback() {
+    embedFallback.classList.add('hidden');
+  }
+
   function showVideo() {
     isEmbedMode = false;
-    isCinebyMode = false;
+    currentEmbedUrl = null;
+    hideEmbedFallback();
+    clearInterval(ytWaitTimer);
     embedPlayer.classList.add('hidden');
     embedPlayer.classList.remove('no-interact');
     embedPlayer.innerHTML = '';
@@ -272,29 +453,18 @@
     videoWrap.classList.remove('hidden');
   }
 
-  /**
-   * Show Cineby embed in embed-player div.
-   */
-  function showCineby(url) {
-    isCinebyMode = true;
-    isEmbedMode = true;
-    // Hide standard players
-    player.classList.add('hidden');
-    player.pause();
-    placeholder.classList.add('hidden');
-    videoWrap.classList.remove('hidden');
-    ytPlayer = null;
-    ytVideoId = null;
-
-    // Show cineby in embed-player div
-    embedPlayer.innerHTML = '';
-    embedPlayer.classList.remove('hidden');
-    const iframe = document.createElement('iframe');
-    iframe.src = url;
-    iframe.allowFullscreen = true;
-    iframe.allow = 'autoplay; encrypted-media; fullscreen';
-    iframe.style.cssText = 'width:100%;height:100%;border:none;';
-    embedPlayer.appendChild(iframe);
+  /** Back to the "nothing is playing" state. */
+  function clearAll() {
+    showVideo();
+    dropSubtitles();
+    player.removeAttribute('src');
+    player.load();
+    currentSrcKey = null;
+    lastState = null;
+    hideTapOverlay();
+    if (placeholderText) placeholderText.textContent = DEFAULT_PLACEHOLDER;
+    placeholder.classList.remove('hidden');
+    setSyncStatus('waiting');
   }
 
   // ── Socket ──────────────────────────────────────────────────────────────────
@@ -314,6 +484,7 @@
   function measureOffset() {
     const t0 = Date.now();
     socket.emit('ping:time', t0, (response) => {
+      if (!response || typeof response.serverTime !== 'number') return;
       const t3 = Date.now();
       const rtt = t3 - t0;
       // offset = serverTime - clientTime (adjusted for half RTT)
@@ -342,10 +513,20 @@
     setTimeout(measureOffset, 1500);
   });
 
+  socket.on('connect_error', () => {
+    connDot.className   = 'dot red';
+    connLabel.textContent = 'Brak połączenia';
+  });
+
   socket.on('disconnect', () => {
     connDot.className   = 'dot red';
     connLabel.textContent = 'Rozłączono';
     setSyncStatus('lost');
+  });
+
+  // Everyone connected to the room, the admin included – they are watching too.
+  socket.on('viewers:count', (n) => {
+    viewersCount.textContent = Number.isFinite(n) ? n : 0;
   });
 
   // Periodically recalibrate clock offset
@@ -353,25 +534,77 @@
 
   // ── Video load ───────────────────────────────────────────────────────────────
 
+  const LOAD_TIMEOUT_MS = 20000;
+
+  /** Key of the source currently attached to <video>; null when nothing is loaded. */
+  let currentSrcKey = null;
+  let loadFailed = false;
+
+  function srcFor(filename, isExternal) {
+    return isExternal
+      ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}`
+      : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
+  }
+
+  function showLoadError() {
+    loadFailed = true;
+    if (placeholderText) placeholderText.textContent = 'Nie udało się załadować filmu. Kliknij „Synchronizuj”, aby spróbować ponownie.';
+    placeholder.classList.remove('hidden');
+    setSyncStatus('error');
+  }
+
+  /**
+   * Point <video> at the requested source. Resolves once the media is playable,
+   * on error, or after a timeout – an unresolved promise used to wedge applyState
+   * forever, leaving the viewer stuck with no explanation.
+   */
   function loadVideo(filename, isExternal) {
     // Only allow http/https for external URLs
     if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) {
       return Promise.resolve();
     }
-    const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
-    const alreadyLoaded = isExternal
-      ? player.src.includes(encodeURIComponent(filename))
-      : player.src.endsWith(encodeURIComponent(filename));
-    if (!alreadyLoaded) {
-      player.src = src;
-      placeholder.classList.add('hidden');
-      return new Promise((resolve) => {
-        player.oncanplay = () => { player.oncanplay = null; resolve(); };
-        player.load();
-      });
-    }
-    return Promise.resolve();
+
+    // Compare against a stored key rather than re-parsing player.src, whose
+    // escaping doesn't always round-trip and caused constant reloads.
+    const key = (isExternal ? 'ext:' : 'up:') + filename;
+    if (key === currentSrcKey) return Promise.resolve();
+
+    currentSrcKey = key;
+    loadFailed = false;
+    if (placeholderText) placeholderText.textContent = 'Ładowanie…';
+    placeholder.classList.remove('hidden');
+    player.src = srcFor(filename, isExternal);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        player.removeEventListener('canplay', onCanPlay);
+        player.removeEventListener('error', onError);
+        if (ok) {
+          placeholder.classList.add('hidden');
+          if (placeholderText) placeholderText.textContent = DEFAULT_PLACEHOLDER;
+        } else {
+          showLoadError();
+        }
+        resolve(ok);
+      };
+      const onCanPlay = () => finish(true);
+      const onError = () => finish(false);
+      const timer = setTimeout(() => finish(false), LOAD_TIMEOUT_MS);
+
+      player.addEventListener('canplay', onCanPlay);
+      player.addEventListener('error', onError);
+      player.load();
+    });
   }
+
+  // A source can also fail after it started loading (proxy drops, 502 mid-stream).
+  player.addEventListener('error', () => {
+    if (currentSrcKey) showLoadError();
+  });
 
   // ── Sync logic ───────────────────────────────────────────────────────────────
 
@@ -379,6 +612,8 @@
   const DRIFT_THRESHOLD_SOFT = 0.04; // >40ms → adjust playbackRate
 
   let lastState = null;
+  let applySeq = 0;
+  let lastStatusKey = 'waiting';
 
   /**
    * Compute where the video *should* be right now based on last known server state.
@@ -396,38 +631,53 @@
    * Apply the server state to the local player.
    */
   async function applyState(state) {
+    // Heartbeats arrive every 3s while loadVideo may still be awaiting; without
+    // this guard an older state could land after a newer one.
+    const seq = ++applySeq;
+
     if (!state.filename) {
+      if (isEmbedMode || currentSrcKey) clearAll();
       setSyncStatus('waiting');
       return;
     }
 
-    // Cineby mode
-    if (state.isCineby) {
-      if (!isCinebyMode) showCineby(state.filename);
-      setSyncStatus('synced');
-      return;
-    }
-
-    // Embed mode (YouTube, Twitch, etc.)
+    // Embed mode (YouTube, Twitch, etc.) – we don't own that player's surface,
+    // so there is nowhere to draw subtitles.
     if (state.isEmbed) {
-      if (isCinebyMode) showVideo();
-      if (!isEmbedMode) showEmbed(state.filename);
+      dropSubtitles();
+      if (!isEmbedMode || currentEmbedUrl !== state.filename) showEmbed(state.filename);
       const ytId = extractYouTubeId(state.filename);
       if (ytId && ytPlayer && ytPlayer.seekTo) {
         applyYTState(state);
+        setSyncStatus('synced');
+        return;
       }
-      setSyncStatus('synced');
+      // Only the YouTube IFrame API gives us playback control – for every other
+      // embed the old code still claimed "zsynchronizowano", which was a lie.
+      setSyncStatus(ytId ? 'loaded' : 'embed');
       return;
     }
 
     // Normal video mode
-    if (isEmbedMode || isCinebyMode) showVideo();
+    if (isEmbedMode) showVideo();
 
-    await loadVideo(state.filename, !!state.isExternal);
+    loadSubtitle(state.subtitle);
+    subs.setOffset(state.subtitleOffset || 0);
+
+    const ok = await loadVideo(state.filename, !!state.isExternal);
+    if (seq !== applySeq) return;      // superseded by a newer state
+    if (ok === false) return;          // load failed, error already shown
 
     const target = state.playing
       ? state.currentTime + (serverNow() - state.serverTime) / 1000
       : state.currentTime;
+
+    // Past the end: calling play() here would restart the film from zero.
+    if (Number.isFinite(player.duration) && target >= player.duration - 0.05) {
+      if (!player.paused) player.pause();
+      setSyncStatus('ended');
+      return;
+    }
 
     const drift = Math.abs(player.currentTime - target);
 
@@ -437,9 +687,12 @@
 
     if (state.playing) {
       if (player.paused) {
-        try { await player.play(); } catch (_) { /* autoplay policy */ }
+        const started = await ensurePlaying();
+        if (seq !== applySeq) return;
+        setSyncStatus(started ? (autoplayBlocked ? 'muted' : 'synced') : 'blocked');
+        return;
       }
-      setSyncStatus('synced');
+      setSyncStatus(autoplayBlocked ? 'muted' : 'synced');
     } else {
       if (!player.paused) player.pause();
       player.currentTime = target;
@@ -449,28 +702,28 @@
 
   // ── Continuous drift correction (every 500ms) ───────────────────────────────
 
+  let lastProgressAt = -1;
+
   setInterval(() => {
-    if (!lastState || !lastState.filename) {
+    // Safety net for a `buffering` flag that never got cleared by an event:
+    // if the picture is actually moving, we are not buffering.
+    if (buffering && !player.paused && player.currentTime > lastProgressAt + 0.05) {
+      setBuffering(false);
+    }
+    lastProgressAt = player.currentTime;
+
+    if (!lastState || !lastState.filename || loadFailed) {
       player.playbackRate = 1.0;
       return;
     }
 
     // YouTube embed sync
     if (lastState.isEmbed && ytPlayer && ytPlayer.getCurrentTime && ytPlayer.seekTo) {
-      if (lastState.playing) {
-        const target = lastState.currentTime + (serverNow() - lastState.serverTime) / 1000;
-        const current = ytPlayer.getCurrentTime();
-        const drift = Math.abs(current - target);
-        if (drift > 2) {
-          ytPlayer.seekTo(target, true);
-        }
-        const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-        if (playerState !== YT.PlayerState.PLAYING && playerState !== YT.PlayerState.BUFFERING) {
-          ytPlayer.playVideo();
-        }
-      }
+      if (lastState.playing) applyYTState(lastState);
       return;
     }
+
+    if (lastState.isEmbed) return;
 
     if (!lastState.playing) {
       player.playbackRate = 1.0;
@@ -480,6 +733,17 @@
     const target = expectedTime();
     if (target === null) return;
 
+    // Past the end there is nothing to chase – the server clock keeps running,
+    // which otherwise left the viewer stuck "correcting" forever.
+    if (player.ended || (Number.isFinite(player.duration) && target >= player.duration - 0.05)) {
+      player.playbackRate = 1.0;
+      setSyncStatus('ended');
+      return;
+    }
+
+    // Nothing to correct while playback is blocked by the autoplay policy.
+    if (player.paused) return;
+
     const drift = player.currentTime - target; // positive = ahead, negative = behind
     const absDrift = Math.abs(drift);
 
@@ -488,7 +752,9 @@
       player.currentTime = target;
       player.playbackRate = 1.0;
       setSyncStatus('corrected');
-      setTimeout(() => setSyncStatus('synced'), 1000);
+      setTimeout(() => {
+        if (lastState && lastState.playing && !player.paused) setSyncStatus(autoplayBlocked ? 'muted' : 'synced');
+      }, 1000);
     } else if (absDrift > DRIFT_THRESHOLD_SOFT) {
       // Gentle speed adjustment to catch up / slow down
       // If behind (drift < 0), speed up slightly; if ahead, slow down
@@ -502,34 +768,40 @@
   // ── Socket events ────────────────────────────────────────────────────────────
 
   socket.on('sync:state', (state) => {
+    if (!state) return;
     lastState = state;
     applyState(state);
   });
 
-  socket.on('video:loaded', ({ filename, isExternal, isEmbed, isCineby }) => {
-    if (isCineby) {
-      showCineby(filename);
-      setSyncStatus('loaded');
-      return;
-    }
+  socket.on('video:loaded', (payload) => {
+    if (!payload) return;
+    const { filename, isExternal, isEmbed } = payload;
+
     if (isEmbed) {
-      if (isCinebyMode) showVideo();
       showEmbed(filename);
       setSyncStatus('loaded');
       return;
     }
-    if (isEmbedMode || isCinebyMode) showVideo();
-    const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
-    const alreadyLoaded = isExternal
-      ? player.src.includes(encodeURIComponent(filename))
-      : player.src.endsWith(encodeURIComponent(filename));
-    if (!alreadyLoaded) {
-      player.src = src;
-      placeholder.classList.add('hidden');
-      player.pause();
-      player.currentTime = 0;
-    }
+    if (isEmbedMode) showVideo();
+
+    // Drop the old source and let the `sync:state` that follows drive the load,
+    // so we never have two loads racing for the same element.
+    currentSrcKey = null;
+    loadFailed = false;
+    lastState = null;
+    player.pause();
+    if (placeholderText) placeholderText.textContent = 'Ładowanie…';
+    placeholder.classList.remove('hidden');
     setSyncStatus('loaded');
+  });
+
+  socket.on('video:cleared', clearAll);
+
+  // Offset nudges arrive on their own channel so dragging the control doesn't
+  // trigger a full state broadcast (and a re-seek) for every viewer.
+  socket.on('subtitles:offset', ({ offset }) => {
+    subs.setOffset(offset);
+    if (lastState) lastState.subtitleOffset = offset;
   });
 
   // ── Manual resync button ────────────────────────────────────────────────────
@@ -537,11 +809,16 @@
   btnResync.addEventListener('click', () => {
     // Recalibrate clock
     measureOffset();
+    // A failed source is retried from scratch
+    if (loadFailed) {
+      currentSrcKey = null;
+      loadFailed = false;
+    }
     // Ask server for fresh state
     socket.emit('viewer:resync');
     setSyncStatus('corrected');
     setTimeout(() => {
-      if (lastState && lastState.playing) setSyncStatus('synced');
+      if (lastState && lastState.playing && !loadFailed) setSyncStatus(autoplayBlocked ? 'muted' : 'synced');
     }, 1500);
   });
 
@@ -561,7 +838,7 @@
 
     // Show drift
     const target = expectedTime();
-    if (target !== null && lastState && lastState.playing) {
+    if (target !== null && lastState && lastState.playing && !lastState.isEmbed && !player.ended) {
       const driftMs = Math.round((player.currentTime - target) * 1000);
       timerDrift.textContent = (driftMs >= 0 ? '+' : '') + driftMs;
       timerDrift.style.color = Math.abs(driftMs) > 150 ? '#e94560' : Math.abs(driftMs) > 40 ? '#ffb300' : '#4caf50';
@@ -580,13 +857,24 @@
     waiting:   { dot: 'yellow', text: 'Czekam na film…'        },
     loaded:    { dot: 'yellow', text: 'Film załadowany'         },
     synced:    { dot: 'green',  text: 'Zsynchronizowano ✓'      },
+    muted:     { dot: 'green',  text: 'Gra bez dźwięku – kliknij film' },
+    blocked:   { dot: 'yellow', text: 'Kliknij film, aby zacząć' },
     paused:    { dot: 'yellow', text: 'Wstrzymano (admin)'      },
+    ended:     { dot: 'yellow', text: 'Koniec filmu'            },
+    embed:     { dot: 'yellow', text: 'Osadzony player – bez synchronizacji' },
     corrected: { dot: 'yellow', text: 'Korekcja synchronizacji…'},
+    buffering: { dot: 'yellow', text: 'Buforowanie…'            },
+    error:     { dot: 'red',    text: 'Błąd ładowania filmu'    },
     lost:      { dot: 'red',    text: 'Brak połączenia'         },
   };
 
+  /** States that "buforowanie" is allowed to mask – errors and pauses win. */
+  const BUFFERABLE = new Set(['synced', 'muted', 'corrected', 'loaded']);
+
   function setSyncStatus(key) {
-    const s = STATUS[key] || STATUS.waiting;
+    lastStatusKey = key;
+    const effective = buffering && BUFFERABLE.has(key) ? 'buffering' : key;
+    const s = STATUS[effective] || STATUS.waiting;
     syncDot.className   = `dot ${s.dot}`;
     syncLabel.textContent = s.text;
     pillDot.className   = `dot ${s.dot}`;
@@ -594,4 +882,5 @@
   }
 
   setSyncStatus('waiting');
+  updateVolumeIcon();
 }());

@@ -26,6 +26,7 @@
 
   const libraryCard    = document.getElementById('library-card');
   const libraryList    = document.getElementById('library-list');
+  const libraryRefresh = document.getElementById('library-refresh');
 
   const urlInput       = document.getElementById('url-input');
   const urlLoadBtn     = document.getElementById('url-load-btn');
@@ -35,9 +36,18 @@
   const embedLoadBtn   = document.getElementById('embed-load-btn');
   const embedStatus    = document.getElementById('embed-status');
 
-  const cinebyInput    = document.getElementById('cineby-input');
-  const cinebyLoadBtn  = document.getElementById('cineby-load-btn');
-  const cinebyStatus   = document.getElementById('cineby-status');
+  const subDropZone    = document.getElementById('sub-drop-zone');
+  const subFileInput   = document.getElementById('sub-file-input');
+  const subDropName    = document.getElementById('sub-drop-filename');
+  const subUploadStatus= document.getElementById('sub-upload-status');
+  const subList        = document.getElementById('sub-list');
+  const subSyncPanel   = document.getElementById('sub-sync-panel');
+  const subOffsetInput = document.getElementById('sub-offset-input');
+  const subOffsetMinus = document.getElementById('sub-offset-minus');
+  const subOffsetPlus  = document.getElementById('sub-offset-plus');
+  const subOffsetReset = document.getElementById('sub-offset-reset');
+  const subtitleLayer  = document.getElementById('subtitle-layer');
+  const btnCc          = document.getElementById('btn-cc');
 
   const placeholder    = document.getElementById('placeholder');
   const player         = document.getElementById('player');
@@ -53,17 +63,66 @@
   const btnPlay        = document.getElementById('btn-play');
   const btnPause       = document.getElementById('btn-pause');
   const btnRestart     = document.getElementById('btn-restart');
+  const btnBack10      = document.getElementById('btn-back10');
+  const btnFwd10       = document.getElementById('btn-fwd10');
+  const btnClear       = document.getElementById('btn-clear');
+  const seekBar        = document.getElementById('seek-bar');
+  const seekTrack      = document.getElementById('seek-track');
+  const seekBuffered   = document.getElementById('seek-buffered');
+  const seekPlayed     = document.getElementById('seek-played');
+  const seekThumb      = document.getElementById('seek-thumb');
+  const seekCurrent    = document.getElementById('seek-current');
+  const seekDuration   = document.getElementById('seek-duration');
   const stateDot       = document.getElementById('state-dot');
   const stateLabel     = document.getElementById('state-label');
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
+  const BACKEND = window.BACKEND_URL || '';
+  const LINKS_KEY = 'aleanimiec.links';
+  const PW_KEY = 'aleanimiec.pw';
+
   let adminPassword = '';
   let socket        = null;
   let selectedFile  = null;
-  let loadedFilenames = []; // { name: string, isEmbed: boolean }[]
+  let maxUploadBytes = 0;   // filled in by /auth
 
-  const BACKEND = window.BACKEND_URL || '';
+  /** Files that live in uploads/ on the server (fetched from /videos). */
+  let serverFiles = [];
+  /** URLs / embeds pasted during earlier sessions, kept in localStorage. */
+  let linkEntries = loadLinks();
+
+  if (typeof io === 'undefined') {
+    pwError.textContent = 'Nie można załadować klienta socket.io – serwer jest niedostępny.';
+    connDot.className = 'dot red';
+    connLabel.textContent = 'Brak serwera';
+    return;
+  }
+
+  function loadLinks() {
+    try {
+      const raw = localStorage.getItem(LINKS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      // 'cineby' entries come from an older build and no longer play.
+      return Array.isArray(parsed)
+        ? parsed.filter((e) => e && typeof e.url === 'string' && e.kind !== 'cineby')
+        : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveLinks() {
+    try { localStorage.setItem(LINKS_KEY, JSON.stringify(linkEntries.slice(0, 30))); } catch (_) {}
+  }
+
+  function rememberLink(url, kind) {
+    const existing = linkEntries.findIndex((e) => e.url === url);
+    if (existing !== -1) linkEntries.splice(existing, 1);
+    linkEntries.unshift({ url, kind });
+    saveLinks();
+    renderLibrary();
+  }
 
   // ── Fullscreen ────────────────────────────────────────────────────────────────
 
@@ -81,25 +140,43 @@
 
   volumeSlider.addEventListener('input', () => {
     const vol = parseFloat(volumeSlider.value);
-    player.volume = vol;
+    setVolume(vol);
     savedVolume = vol > 0 ? vol : savedVolume;
-    updateVolumeIcon();
   });
 
   btnMute.addEventListener('click', () => {
-    if (player.volume > 0) {
-      savedVolume = player.volume;
-      player.volume = 0;
+    if (currentVolume() > 0) {
+      savedVolume = currentVolume();
+      setVolume(0);
       volumeSlider.value = 0;
     } else {
-      player.volume = savedVolume || 1;
-      volumeSlider.value = player.volume;
+      setVolume(savedVolume || 1);
+      volumeSlider.value = savedVolume || 1;
     }
-    updateVolumeIcon();
   });
 
-  function updateVolumeIcon() {
-    if (player.volume === 0) {
+  function currentVolume() {
+    if (isEmbedMode && ytPlayer && ytPlayer.getVolume) {
+      return ytPlayer.isMuted && ytPlayer.isMuted() ? 0 : ytPlayer.getVolume() / 100;
+    }
+    return player.muted ? 0 : player.volume;
+  }
+
+  /** Route volume to whichever player is on screen – the slider used to be inert in embed mode. */
+  function setVolume(vol) {
+    player.muted = vol === 0;
+    player.volume = vol;
+    if (ytPlayer && ytPlayer.setVolume) {
+      ytPlayer.setVolume(Math.round(vol * 100));
+      if (vol === 0 && ytPlayer.mute) ytPlayer.mute();
+      else if (ytPlayer.unMute) ytPlayer.unMute();
+    }
+    updateVolumeIcon(vol);
+  }
+
+  function updateVolumeIcon(vol) {
+    const v = typeof vol === 'number' ? vol : currentVolume();
+    if (v === 0) {
       volIconOn.classList.add('hidden');
       volIconOff.classList.remove('hidden');
     } else {
@@ -162,9 +239,12 @@
   }
 
   let isEmbedMode = false;
+  let currentEmbedUrl = null;
+  let currentSrcKey = null;
   let ytPlayer = null;
   let ytReady = false;
   let ytVideoId = null;
+  let ytWaitTimer = null;
 
   // YouTube IFrame API ready callback
   window.onYouTubeIframeAPIReady = window.onYouTubeIframeAPIReady || function() {};
@@ -200,7 +280,7 @@
         onStateChange: function(event) {
           // When admin plays/pauses via YT player, sync to viewers
           if (!socket) return;
-          const currentTime = ytPlayer.getCurrentTime();
+          const currentTime = ytTime();
           if (event.data === YT.PlayerState.PLAYING) {
             socket.emit('admin:play', { password: adminPassword, currentTime: currentTime });
             setStateUI(true);
@@ -213,56 +293,86 @@
     });
   }
 
+  /** YT returns undefined/NaN before it is ready; a NaN time desyncs every viewer. */
+  function ytTime() {
+    if (!ytPlayer || !ytPlayer.getCurrentTime) return 0;
+    const t = ytPlayer.getCurrentTime();
+    return Number.isFinite(t) && t >= 0 ? t : 0;
+  }
+
   function showEmbed(url) {
     isEmbedMode = true;
+    currentEmbedUrl = url;
+    currentSrcKey = null;
     player.classList.add('hidden');
     player.pause();
     placeholder.classList.add('hidden');
+    showSeekBar(false);
+    clearInterval(ytWaitTimer);
 
     const ytId = extractYouTubeId(url);
     if (ytId) {
-      if (ytReady) {
-        if (ytVideoId !== ytId) {
-          createYTPlayerAdmin(ytId);
-        }
+      if (ytReady || (window.YT && window.YT.Player)) {
+        ytReady = true;
+        if (ytVideoId !== ytId) createYTPlayerAdmin(ytId);
       } else {
-        const waitForYT = setInterval(() => {
+        // Tracked so a second load before the API arrives can't create two players.
+        ytWaitTimer = setInterval(() => {
           if (ytReady || (window.YT && window.YT.Player)) {
             ytReady = true;
-            clearInterval(waitForYT);
+            clearInterval(ytWaitTimer);
             createYTPlayerAdmin(ytId);
           }
         }, 100);
       }
       // Show playback controls for admin YouTube sync
-      playbackControls.style.removeProperty('display');
-      playbackControls.style.display = 'flex';
+      playbackControls.classList.remove('hidden');
     } else {
-      // Non-YouTube embed (Twitch, etc.)
+      // Non-YouTube embed (Twitch, …) – plain iframe, no sync possible
       const twitchUrl = toTwitchEmbedUrl(url);
-      const embedUrl = twitchUrl || url;
       embedPlayer.innerHTML = '';
       embedPlayer.classList.remove('hidden');
       const iframe = document.createElement('iframe');
-      iframe.src = embedUrl;
+      iframe.src = twitchUrl || url;
       iframe.allowFullscreen = true;
       iframe.allow = 'autoplay; encrypted-media; fullscreen';
       iframe.style.cssText = 'width:100%;height:100%;border:none;';
       embedPlayer.appendChild(iframe);
       ytPlayer = null;
       ytVideoId = null;
-      // Hide standard playback controls for non-YT embeds
-      playbackControls.style.display = 'none';
+      // Hide standard playback controls for non-YT embeds, but keep "clear".
+      playbackControls.classList.remove('hidden');
+      btnPlay.classList.add('hidden');
+      btnPause.classList.add('hidden');
+      btnRestart.classList.add('hidden');
     }
   }
 
   function showVideo() {
     isEmbedMode = false;
+    currentEmbedUrl = null;
+    clearInterval(ytWaitTimer);
     embedPlayer.classList.add('hidden');
     embedPlayer.innerHTML = '';
     player.classList.remove('hidden');
     ytPlayer = null;
     ytVideoId = null;
+    btnPlay.classList.remove('hidden');
+    btnPause.classList.remove('hidden');
+    btnRestart.classList.remove('hidden');
+  }
+
+  function clearPlayer() {
+    showVideo();
+    player.pause();
+    player.removeAttribute('src');
+    player.load();
+    currentSrcKey = null;
+    placeholder.classList.remove('hidden');
+    playbackControls.classList.add('hidden');
+    showSeekBar(false);
+    stateDot.className = 'dot';
+    stateLabel.textContent = 'Brak aktywnego filmu';
   }
 
   // ── Login flow ────────────────────────────────────────────────────────────────
@@ -270,44 +380,111 @@
   pwSubmit.addEventListener('click', () => attemptLogin(pwInput.value.trim()));
   pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwSubmit.click(); });
 
-  /**
-   * Tries to authenticate by sending a test socket command.
-   * We can't verify server-side synchronously, so we connect with the password
-   * and the server will silently ignore any admin commands with a wrong password.
-   * We do a lightweight HTTP check via the upload endpoint (returns 403 on bad pw).
-   */
-  async function attemptLogin(pw) {
-    if (!pw) { pwError.textContent = 'Podaj hasło.'; return; }
+  let lockoutTimer = null;
 
-    // Quick auth-check: send a no-op OPTIONS-like fetch
-    try {
-      const res = await fetch(`${BACKEND}/upload`, {
-        method: 'POST',
-        headers: { 'x-admin-password': pw },
-        body: new FormData(), // empty – server will reject, but we check the HTTP code
-      });
-      if (res.status === 403) {
-        pwError.textContent = 'Złe hasło. Spróbuj ponownie.';
+  /** Block the login form for `seconds`, showing the remaining time. */
+  function startLockoutCountdown(seconds) {
+    clearInterval(lockoutTimer);
+    let left = Math.max(1, Math.ceil(seconds));
+    pwSubmit.disabled = true;
+    pwInput.disabled = true;
+
+    const tick = () => {
+      pwError.textContent = `Zbyt wiele nieudanych prób. Spróbuj ponownie za ${left} s.`;
+      if (left <= 0) {
+        clearInterval(lockoutTimer);
+        lockoutTimer = null;          // the `finally` in attemptLogin checks this
+        pwSubmit.disabled = false;
+        pwInput.disabled = false;
+        pwError.textContent = 'Możesz spróbować ponownie.';
         return;
       }
-      // 400 (no file) means the password was accepted
+      left -= 1;
+    };
+
+    tick();
+    lockoutTimer = setInterval(tick, 1000);
+  }
+
+  /**
+   * Verify the password against the dedicated /auth endpoint. The old check
+   * posted an empty body to /upload and treated anything that wasn't a 403 as
+   * success, so a 500 or a sleeping backend logged you in with a bad password.
+   */
+  async function attemptLogin(pw, silent) {
+    if (!pw) { pwError.textContent = 'Podaj hasło.'; return false; }
+    pwSubmit.disabled = true;
+    if (!silent) pwError.textContent = 'Sprawdzanie…';
+
+    try {
+      const res = await fetch(`${BACKEND}/auth`, {
+        method: 'POST',
+        headers: { 'x-admin-password': pw },
+      });
+
+      if (res.status === 429) {
+        // Locked out by the brute force limiter – count it down instead of
+        // letting the admin hammer a door that won't open.
+        const data = await res.json().catch(() => ({}));
+        const wait = Number(data.retryAfter) || Number(res.headers.get('Retry-After')) || 60;
+        try { sessionStorage.removeItem(PW_KEY); } catch (_) {}
+        startLockoutCountdown(wait);
+        return false;
+      }
+      if (res.status === 403) {
+        pwError.textContent = silent ? '' : 'Złe hasło. Spróbuj ponownie.';
+        try { sessionStorage.removeItem(PW_KEY); } catch (_) {}
+        return false;
+      }
+      if (!res.ok) {
+        pwError.textContent = `Serwer odpowiedział błędem (${res.status}).`;
+        return false;
+      }
+
+      try {
+        const info = await res.json();
+        if (info && info.maxUploadBytes) maxUploadBytes = info.maxUploadBytes;
+      } catch (_) { /* older backend without the field */ }
+
       adminPassword = pw;
+      try { sessionStorage.setItem(PW_KEY, pw); } catch (_) {}
+      pwError.textContent = '';
       loginOverlay.style.display = 'none';
       mainContent.style.display  = 'block';
       initSocket();
-    } catch (err) {
+      refreshLibrary();
+      refreshSubtitles();
+      return true;
+    } catch (_) {
       pwError.textContent = 'Błąd połączenia z serwerem.';
+      return false;
+    } finally {
+      // Don't undo a lockout that the 429 branch just started.
+      if (!lockoutTimer) pwSubmit.disabled = false;
     }
   }
+
+  // Resume the session after a page reload instead of asking again.
+  (function autoLogin() {
+    let saved = null;
+    try { saved = sessionStorage.getItem(PW_KEY); } catch (_) {}
+    if (saved) attemptLogin(saved, true);
+  }());
 
   // ── Socket ────────────────────────────────────────────────────────────────────
 
   function initSocket() {
+    if (socket) return;
     socket = io(BACKEND || undefined);
 
     socket.on('connect', () => {
       connDot.className   = 'dot green';
       connLabel.textContent = 'Połączono';
+    });
+
+    socket.on('connect_error', () => {
+      connDot.className   = 'dot red';
+      connLabel.textContent = 'Brak połączenia';
     });
 
     socket.on('disconnect', () => {
@@ -317,18 +494,22 @@
 
     socket.on('viewers:count', (n) => { viewersCount.textContent = n; });
 
-    socket.on('sync:state', (state) => {
-      updatePlayerState(state);
+    socket.on('sync:state', updatePlayerState);
+
+    socket.on('video:loaded', ({ filename, isExternal, isEmbed }) => {
+      if (isExternal) rememberLink(filename, isEmbed ? 'embed' : 'url');
+      else refreshLibrary();
     });
 
-    socket.on('video:loaded', ({ filename, isEmbed }) => {
-      if (!loadedFilenames.some(f => f.name === filename)) {
-        loadedFilenames.push({ name: filename, isEmbed: !!isEmbed });
-        renderLibrary();
-      }
-      if (isEmbed) {
-        showEmbed(filename);
-      }
+    socket.on('video:cleared', clearPlayer);
+
+    socket.on('subtitles:changed', refreshSubtitles);
+
+    socket.on('subtitles:offset', ({ offset }) => applyOffset(offset, { broadcast: false }));
+
+    socket.on('admin:error', ({ message }) => {
+      stateDot.className = 'dot red';
+      stateLabel.textContent = message || 'Błąd';
     });
   }
 
@@ -354,8 +535,18 @@
 
   function setSelectedFile(file) {
     selectedFile = file;
-    dropFilename.textContent = file.name;
+    dropFilename.textContent = `${file.name} (${formatSize(file.size)})`;
     uploadControls.style.display = 'flex';
+
+    // Catch an oversized file here – once the stream is rejected mid-upload the
+    // browser usually reports a bare network error instead of the real reason.
+    if (maxUploadBytes && file.size > maxUploadBytes) {
+      uploadStatus.textContent = `Plik jest za duży (limit ${formatSize(maxUploadBytes)}).`;
+      uploadBtn.disabled = true;
+      selectedFile = null;
+      return;
+    }
+    uploadBtn.disabled = false;
     uploadStatus.textContent = '';
   }
 
@@ -363,6 +554,17 @@
     if (!selectedFile) return;
     doUpload(selectedFile);
   });
+
+  /** Pull the server's JSON error message out of a failed upload response. */
+  function errorMessage(xhr) {
+    try {
+      const data = JSON.parse(xhr.responseText);
+      if (data && data.error) return data.error;
+    } catch (_) {}
+    if (xhr.status === 403) return 'Brak autoryzacji – zaloguj się ponownie.';
+    if (xhr.status === 0) return 'Połączenie przerwane (CORS lub serwer offline).';
+    return `Błąd: ${xhr.status}`;
+  }
 
   function doUpload(file) {
     const fd = new FormData();
@@ -381,6 +583,7 @@
       if (e.lengthComputable) {
         const pct = Math.round((e.loaded / e.total) * 100);
         progressBar.style.width = pct + '%';
+        uploadStatus.textContent = `Wgrywanie… ${pct}%`;
       }
     });
 
@@ -389,118 +592,353 @@
       progressWrap.classList.add('hidden');
 
       if (xhr.status === 200) {
-        const data = JSON.parse(xhr.responseText);
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (_) {}
         uploadStatus.textContent = '✓ Wgrano!';
         selectedFile = null;
-        if (!loadedFilenames.some(f => f.name === data.filename)) {
-          loadedFilenames.push({ name: data.filename, isEmbed: false });
-          renderLibrary();
-        }
-        loadVideoForAdmin(data.filename, false);
+        fileInput.value = '';
+        dropFilename.textContent = '';
+        uploadControls.style.display = 'none';
+        refreshLibrary();
+        if (data.filename) loadVideoForAdmin(data.filename, false);
       } else {
-        uploadStatus.textContent = `Błąd: ${xhr.status}`;
+        uploadStatus.textContent = errorMessage(xhr);
       }
     });
 
     xhr.addEventListener('error', () => {
       uploadBtn.disabled = false;
-      uploadStatus.textContent = 'Błąd sieci.';
+      progressWrap.classList.add('hidden');
+      uploadStatus.textContent = 'Błąd sieci – sprawdź połączenie z serwerem.';
+    });
+
+    xhr.addEventListener('abort', () => {
+      uploadBtn.disabled = false;
+      progressWrap.classList.add('hidden');
+      uploadStatus.textContent = 'Przerwano.';
     });
 
     xhr.send(fd);
   }
 
-  // ── Load from URL ─────────────────────────────────────────────────────────────
+  // ── Load from URL / embed ───────────────────────────────────────────────────
+
+  function validUrl(value, statusEl) {
+    if (!value) { statusEl.textContent = 'Podaj URL.'; return false; }
+    try {
+      const u = new URL(value);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('protocol');
+    } catch (_) {
+      statusEl.textContent = 'Nieprawidłowy URL (musi zaczynać się od http:// lub https://).';
+      return false;
+    }
+    return true;
+  }
 
   urlLoadBtn.addEventListener('click', () => {
     const url = urlInput.value.trim();
-    if (!url) { urlStatus.textContent = 'Podaj URL.'; return; }
-    try { new URL(url); } catch (_) { urlStatus.textContent = 'Nieprawidłowy URL.'; return; }
+    if (!validUrl(url, urlStatus)) return;
     socket.emit('admin:load-url', { password: adminPassword, url });
     loadVideoForAdmin(url, true);
     urlStatus.textContent = '✓ Załadowano z URL!';
-    if (!loadedFilenames.some(f => f.name === url)) {
-      loadedFilenames.push({ name: url, isEmbed: false });
-      renderLibrary();
-    }
+    rememberLink(url, 'url');
   });
-
-  // ── Load embed (YouTube, Twitch, etc.) ──────────────────────────────────────
 
   embedLoadBtn.addEventListener('click', () => {
     const url = embedInput.value.trim();
-    if (!url) { embedStatus.textContent = 'Podaj URL.'; return; }
-    try { new URL(url); } catch (_) { embedStatus.textContent = 'Nieprawidłowy URL.'; return; }
+    if (!validUrl(url, embedStatus)) return;
     socket.emit('admin:load-embed', { password: adminPassword, url });
     showEmbed(url);
     embedStatus.textContent = '✓ Osadzono!';
-    if (!loadedFilenames.some(f => f.name === url)) {
-      loadedFilenames.push({ name: url, isEmbed: true });
-      renderLibrary();
-    }
+    rememberLink(url, 'embed');
   });
 
-  // ── Load Cineby ──────────────────────────────────────────────────────────────
+  // ── Subtitles ─────────────────────────────────────────────────────────────────
+  // The admin renders the same track locally, so the offset can be dialled in
+  // against the picture instead of guessing.
 
-  cinebyLoadBtn.addEventListener('click', () => {
-    const url = cinebyInput.value.trim();
-    if (!url) { cinebyStatus.textContent = 'Podaj URL.'; return; }
-    try { new URL(url); } catch (_) { cinebyStatus.textContent = 'Nieprawidłowy URL.'; return; }
-    socket.emit('admin:load-cineby', { password: adminPassword, url });
-    showEmbed(url);
-    cinebyStatus.textContent = '✓ Załadowano Cineby!';
-    if (!loadedFilenames.some(f => f.name === url)) {
-      loadedFilenames.push({ name: url, isEmbed: true, isCineby: true });
-      renderLibrary();
-    }
+  const subs = window.Subtitles.createRenderer(subtitleLayer);
+  let subtitleFiles = [];        // .vtt files on the server
+  let activeSubtitle = null;     // the one currently broadcast
+  let currentSubtitleFile = null; // the one parsed into `subs`
+
+  function updateCcButton() {
+    btnCc.setAttribute('aria-pressed', subs.isVisible() ? 'true' : 'false');
+    btnCc.title = subs.isVisible() ? 'Wyłącz napisy' : 'Włącz napisy';
+  }
+
+  btnCc.addEventListener('click', () => {
+    subs.setVisible(!subs.isVisible());
+    updateCcButton();
   });
 
-  // ── Library ───────────────────────────────────────────────────────────────────
+  async function loadSubtitle(file) {
+    if ((file || null) === currentSubtitleFile) return;
+    currentSubtitleFile = file || null;
 
-  function renderLibrary() {
-    if (loadedFilenames.length === 0) {
-      libraryCard.style.display = 'none';
+    if (!currentSubtitleFile) {
+      subs.clear();
+      btnCc.classList.add('hidden');
       return;
     }
-    libraryCard.style.display = 'block';
-    libraryList.innerHTML = '';
+    try {
+      const res = await fetch(`${BACKEND}/uploads/${encodeURIComponent(currentSubtitleFile)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const cues = window.Subtitles.parse(await res.text());
+      if (currentSubtitleFile !== file) return;
+      subs.setCues(cues);
+      btnCc.classList.toggle('hidden', cues.length === 0);
+      updateCcButton();
+    } catch (_) {
+      subs.clear();
+      btnCc.classList.add('hidden');
+    }
+  }
 
-    loadedFilenames.forEach((entry) => {
-      const filename = entry.name;
-      const isEmbed = !!entry.isEmbed;
-      const isCineby = !!entry.isCineby;
-      const isExternal = filename.startsWith('http://') || filename.startsWith('https://');
+  // ── Upload ──
+
+  subDropZone.addEventListener('click', () => subFileInput.click());
+  subDropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    subDropZone.classList.add('dragover');
+  });
+  subDropZone.addEventListener('dragleave', () => subDropZone.classList.remove('dragover'));
+  subDropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    subDropZone.classList.remove('dragover');
+    if (e.dataTransfer.files[0]) uploadSubtitle(e.dataTransfer.files[0]);
+  });
+  subFileInput.addEventListener('change', () => {
+    if (subFileInput.files[0]) uploadSubtitle(subFileInput.files[0]);
+  });
+
+  async function uploadSubtitle(file) {
+    subDropName.textContent = file.name;
+    subUploadStatus.textContent = 'Wysyłanie…';
+
+    const fd = new FormData();
+    fd.append('subtitle', file);
+    try {
+      const res = await fetch(`${BACKEND}/subtitles`, {
+        method: 'POST',
+        headers: { 'x-admin-password': adminPassword },
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        subUploadStatus.textContent = data.error || `Błąd: ${res.status}`;
+        return;
+      }
+      subUploadStatus.textContent = '✓ Napisy wgrane i włączone!';
+      subFileInput.value = '';
+      refreshSubtitles();
+    } catch (_) {
+      subUploadStatus.textContent = 'Błąd sieci.';
+    }
+  }
+
+  async function refreshSubtitles() {
+    try {
+      const res = await fetch(`${BACKEND}/subtitles`, { headers: { 'x-admin-password': adminPassword } });
+      if (!res.ok) return;
+      const data = await res.json();
+      subtitleFiles = Array.isArray(data.files) ? data.files : [];
+    } catch (_) { /* keep the old list */ }
+    renderSubtitleList();
+  }
+
+  function renderSubtitleList() {
+    subList.innerHTML = '';
+    subtitleFiles.forEach((entry) => {
+      const isActive = entry.name === activeSubtitle;
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:.75rem;';
+      row.className = 'library-row';
 
       const name = document.createElement('span');
-      name.textContent = isCineby ? '🎬 ' + filename : isEmbed ? '📺 ' + filename : isExternal ? '🔗 ' + filename : filename;
-      name.style.cssText = 'flex:1;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      name.className = 'library-row__name';
+      name.textContent = `${isActive ? '💬' : '📄'} ${entry.name}`;
+      name.title = entry.name;
 
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-secondary';
-      btn.textContent = '▶ Odtwórz';
-      btn.style.flexShrink = '0';
-      btn.addEventListener('click', () => {
-        if (isCineby) {
-          socket.emit('admin:load-cineby', { password: adminPassword, url: filename });
-          showEmbed(filename);
-        } else if (isEmbed) {
-          socket.emit('admin:load-embed', { password: adminPassword, url: filename });
-          showEmbed(filename);
-        } else if (isExternal) {
-          socket.emit('admin:load-url', { password: adminPassword, url: filename });
-          loadVideoForAdmin(filename, true);
-        } else {
-          socket.emit('admin:load', { password: adminPassword, filename: filename });
-          loadVideoForAdmin(filename, false);
+      const toggle = document.createElement('button');
+      toggle.className = isActive ? 'btn btn-ghost btn-sm' : 'btn btn-secondary btn-sm';
+      toggle.textContent = isActive ? 'Wyłącz' : 'Włącz';
+      toggle.addEventListener('click', () => {
+        socket.emit('admin:subtitle', { password: adminPassword, file: isActive ? null : entry.name });
+      });
+
+      const remove = document.createElement('button');
+      remove.className = 'btn btn-danger btn-sm';
+      remove.textContent = '🗑';
+      remove.title = 'Usuń napisy z serwera';
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(`Usunąć napisy „${entry.name}"?`)) return;
+        remove.disabled = true;
+        try {
+          const res = await fetch(`${BACKEND}/subtitles/${encodeURIComponent(entry.name)}`, {
+            method: 'DELETE',
+            headers: { 'x-admin-password': adminPassword },
+          });
+          if (!res.ok) throw new Error('delete failed');
+        } catch (_) {
+          remove.disabled = false;
+          window.alert('Nie udało się usunąć napisów.');
+          return;
         }
+        refreshSubtitles();
       });
 
       row.appendChild(name);
-      row.appendChild(btn);
+      row.appendChild(toggle);
+      row.appendChild(remove);
+      subList.appendChild(row);
+    });
+
+    subSyncPanel.classList.toggle('hidden', !activeSubtitle);
+  }
+
+  // ── Offset ──
+  // Typing sends continuously, so debounce the socket traffic while still
+  // updating the admin's own rendering immediately.
+
+  let offsetTimer = null;
+
+  function applyOffset(value, { broadcast }) {
+    const n = Number(value);
+    const offset = Number.isFinite(n) ? Math.max(-600, Math.min(600, n)) : 0;
+    subs.setOffset(offset);
+    if (document.activeElement !== subOffsetInput) subOffsetInput.value = offset;
+    if (!broadcast) return;
+    clearTimeout(offsetTimer);
+    offsetTimer = setTimeout(() => {
+      socket.emit('admin:subtitle-offset', { password: adminPassword, offset });
+    }, 150);
+  }
+
+  subOffsetInput.addEventListener('input', () => applyOffset(subOffsetInput.value, { broadcast: true }));
+  subOffsetMinus.addEventListener('click', () => {
+    subOffsetInput.value = (Number(subOffsetInput.value || 0) - 0.5).toFixed(1);
+    applyOffset(subOffsetInput.value, { broadcast: true });
+  });
+  subOffsetPlus.addEventListener('click', () => {
+    subOffsetInput.value = (Number(subOffsetInput.value || 0) + 0.5).toFixed(1);
+    applyOffset(subOffsetInput.value, { broadcast: true });
+  });
+  subOffsetReset.addEventListener('click', () => {
+    subOffsetInput.value = '0';
+    applyOffset(0, { broadcast: true });
+  });
+
+  // A timer rather than requestAnimationFrame: rAF is suspended while the tab is
+  // hidden, and 100 ms is well below the threshold where a cue change is visible.
+  setInterval(() => {
+    if (currentSrcKey && !isEmbedMode) {
+      subs.update(player.currentTime);
+      if (!scrubbing) updateSeekUI();
+    }
+  }, 100);
+
+  // ── Library ───────────────────────────────────────────────────────────────────
+
+  function formatSize(bytes) {
+    if (!bytes) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    let n = bytes;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+  }
+
+  /** Fetch the real contents of uploads/ – the list used to live only in memory. */
+  async function refreshLibrary() {
+    try {
+      const res = await fetch(`${BACKEND}/videos`, { headers: { 'x-admin-password': adminPassword } });
+      if (!res.ok) return;
+      const data = await res.json();
+      serverFiles = Array.isArray(data.files) ? data.files : [];
+    } catch (_) {
+      // keep whatever we had
+    }
+    renderLibrary();
+  }
+
+  libraryRefresh.addEventListener('click', refreshLibrary);
+
+  function renderLibrary() {
+    const rows = [
+      ...serverFiles.map((f) => ({ label: f.name, name: f.name, size: f.size, kind: 'file' })),
+      ...linkEntries.map((e) => ({ label: e.url, name: e.url, kind: e.kind })),
+    ];
+
+    libraryCard.classList.toggle('hidden', rows.length === 0);
+    libraryList.innerHTML = '';
+
+    const icons = { file: '🎞', url: '🔗', embed: '📺' };
+
+    rows.forEach((entry) => {
+      const row = document.createElement('div');
+      row.className = 'library-row';
+
+      const name = document.createElement('span');
+      name.className = 'library-row__name';
+      name.textContent = `${icons[entry.kind] || ''} ${entry.label}`;
+      name.title = entry.label;
+
+      const play = document.createElement('button');
+      play.className = 'btn btn-secondary btn-sm';
+      play.textContent = '▶ Odtwórz';
+      play.addEventListener('click', () => {
+        if (entry.kind === 'embed') {
+          socket.emit('admin:load-embed', { password: adminPassword, url: entry.name });
+          showEmbed(entry.name);
+        } else if (entry.kind === 'url') {
+          socket.emit('admin:load-url', { password: adminPassword, url: entry.name });
+          loadVideoForAdmin(entry.name, true);
+        } else {
+          socket.emit('admin:load', { password: adminPassword, filename: entry.name });
+          loadVideoForAdmin(entry.name, false);
+        }
+      });
+
+      const remove = document.createElement('button');
+      remove.className = 'btn btn-danger btn-sm';
+      remove.textContent = '🗑';
+      remove.title = entry.kind === 'file' ? 'Usuń plik z serwera' : 'Usuń z listy';
+      remove.addEventListener('click', () => deleteEntry(entry, remove));
+
+      row.appendChild(name);
+      if (entry.size) {
+        const size = document.createElement('span');
+        size.className = 'library-row__size';
+        size.textContent = formatSize(entry.size);
+        row.appendChild(size);
+      }
+      row.appendChild(play);
+      row.appendChild(remove);
       libraryList.appendChild(row);
     });
+  }
+
+  async function deleteEntry(entry, btn) {
+    if (entry.kind !== 'file') {
+      linkEntries = linkEntries.filter((e) => e.url !== entry.name);
+      saveLinks();
+      renderLibrary();
+      return;
+    }
+    if (!window.confirm(`Usunąć plik „${entry.name}" z serwera?`)) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch(`${BACKEND}/videos/${encodeURIComponent(entry.name)}`, {
+        method: 'DELETE',
+        headers: { 'x-admin-password': adminPassword },
+      });
+      if (!res.ok) throw new Error('delete failed');
+    } catch (_) {
+      btn.disabled = false;
+      window.alert('Nie udało się usunąć pliku.');
+      return;
+    }
+    refreshLibrary();
   }
 
   // ── Player ────────────────────────────────────────────────────────────────────
@@ -510,67 +948,218 @@
     if (isEmbedMode) showVideo();
     // Only allow http/https for external URLs
     if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) return;
-    const src = isExternal ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}` : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
-    const currentSrc = player.src; // absolute URL
-    const alreadyLoaded = isExternal ? currentSrc.includes(encodeURIComponent(filename)) : currentSrc.endsWith(encodeURIComponent(filename));
-    if (!alreadyLoaded) {
-      player.src = src;
+
+    const key = (isExternal ? 'ext:' : 'up:') + filename;
+    if (key !== currentSrcKey) {
+      currentSrcKey = key;
+      // Swapping the source fires pause/seeked on the element; don't echo those.
+      suppressSeekSync(1000);
+      player.src = isExternal
+        ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}`
+        : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
       player.load();
       placeholder.classList.add('hidden');
     }
-    playbackControls.style.removeProperty('display');
-    playbackControls.style.display = 'flex';
-    setStateUI(false);
+    playbackControls.classList.remove('hidden');
+    showSeekBar(true);
   }
 
+  player.addEventListener('error', () => {
+    if (!currentSrcKey) return;
+    stateDot.className = 'dot red';
+    stateLabel.textContent = 'Nie udało się załadować filmu (sprawdź plik lub URL).';
+  });
+
+  // The `play` / `pause` element events below do the broadcasting, so these
+  // buttons only drive the player – otherwise every click emitted twice.
   btnPlay.addEventListener('click', () => {
     if (isEmbedMode && ytPlayer && ytPlayer.playVideo) {
-      ytPlayer.playVideo();
-      const currentTime = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
-      socket.emit('admin:play', { password: adminPassword, currentTime: currentTime });
+      ytPlayer.playVideo();   // YT onStateChange broadcasts
+      setStateUI(true);
     } else {
-      player.play();
-      socket.emit('admin:play', { password: adminPassword, currentTime: player.currentTime });
+      player.play().catch(() => {});
     }
-    setStateUI(true);
   });
 
   btnPause.addEventListener('click', () => {
     if (isEmbedMode && ytPlayer && ytPlayer.pauseVideo) {
       ytPlayer.pauseVideo();
-      const currentTime = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
-      socket.emit('admin:pause', { password: adminPassword, currentTime: currentTime });
+      setStateUI(false);
     } else {
       player.pause();
-      socket.emit('admin:pause', { password: adminPassword, currentTime: player.currentTime });
     }
-    setStateUI(false);
   });
 
   btnRestart.addEventListener('click', () => {
     if (isEmbedMode && ytPlayer && ytPlayer.seekTo) {
       ytPlayer.pauseVideo();
       ytPlayer.seekTo(0, true);
-      socket.emit('admin:seek',  { password: adminPassword, currentTime: 0 });
-      socket.emit('admin:pause', { password: adminPassword, currentTime: 0 });
     } else {
       player.pause();
+      suppressSeekSync();
       player.currentTime = 0;
-      socket.emit('admin:seek',  { password: adminPassword, currentTime: 0 });
-      socket.emit('admin:pause', { password: adminPassword, currentTime: 0 });
     }
+    socket.emit('admin:seek',  { password: adminPassword, currentTime: 0 });
+    socket.emit('admin:pause', { password: adminPassword, currentTime: 0 });
     setStateUI(false);
   });
 
-  // Sync seek events (scrubbing) – only for manual user seeks, not programmatic ones
+  btnClear.addEventListener('click', () => {
+    socket.emit('admin:clear', { password: adminPassword });
+    clearPlayer();
+  });
+
+  // ── Seek bar ─────────────────────────────────────────────────────────────────
+  // The <video> has no native controls (they would let the admin desync himself
+  // from the room), so playback position gets its own scrubber. Dragging it just
+  // moves player.currentTime – the existing `seeked` handler broadcasts.
+
+  let scrubbing = false;
+
+  function formatClock(sec) {
+    if (!Number.isFinite(sec) || sec < 0) sec = 0;
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+
+  /** Duration we can actually seek within (live streams report Infinity). */
+  function seekableDuration() {
+    const d = player.duration;
+    return Number.isFinite(d) && d > 0 ? d : 0;
+  }
+
+  function ratioFromPointer(e) {
+    const rect = seekTrack.getBoundingClientRect();
+    if (!rect.width) return 0;
+    return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  }
+
+  function scrubTo(e) {
+    const d = seekableDuration();
+    if (!d) return;
+    player.currentTime = Math.min(d - 0.05, ratioFromPointer(e) * d);
+    updateSeekUI();
+  }
+
+  seekTrack.addEventListener('pointerdown', (e) => {
+    if (isEmbedMode || !seekableDuration()) return;
+    scrubbing = true;
+    try { seekTrack.setPointerCapture(e.pointerId); } catch (_) {}
+    scrubTo(e);
+    e.preventDefault();
+  });
+
+  seekTrack.addEventListener('pointermove', (e) => { if (scrubbing) scrubTo(e); });
+
+  function endScrub(e) {
+    if (!scrubbing) return;
+    scrubbing = false;
+    try { seekTrack.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  seekTrack.addEventListener('pointerup', (e) => { scrubTo(e); endScrub(e); });
+  seekTrack.addEventListener('pointercancel', endScrub);
+
+  // Keyboard access for the same control.
+  seekTrack.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') { nudge(5); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') { nudge(-5); e.preventDefault(); }
+  });
+
+  /** Jump relative to the current position, on whichever player is active. */
+  function nudge(delta) {
+    if (isEmbedMode) {
+      if (!ytPlayer || !ytPlayer.seekTo) return;
+      const t = Math.max(0, ytTime() + delta);
+      ytPlayer.seekTo(t, true);
+      socket.emit('admin:seek', { password: adminPassword, currentTime: t });
+      return;
+    }
+    const d = seekableDuration();
+    if (!d) return;
+    player.currentTime = Math.min(d - 0.05, Math.max(0, player.currentTime + delta));
+  }
+
+  btnBack10.addEventListener('click', () => nudge(-10));
+  btnFwd10.addEventListener('click', () => nudge(10));
+
+  function updateSeekUI() {
+    const d = seekableDuration();
+    const t = player.currentTime || 0;
+
+    seekCurrent.textContent = formatClock(t);
+    seekDuration.textContent = d ? formatClock(d) : '--:--';
+
+    const pct = d ? Math.min(100, (t / d) * 100) : 0;
+    seekPlayed.style.width = pct + '%';
+    seekThumb.style.left = pct + '%';
+
+    seekTrack.setAttribute('aria-valuemax', Math.round(d));
+    seekTrack.setAttribute('aria-valuenow', Math.round(t));
+    seekTrack.setAttribute('aria-valuetext', `${formatClock(t)} z ${d ? formatClock(d) : '?'}`);
+
+    // Buffered span covering the playhead – tells the admin whether a seek will stall.
+    let bufferedEnd = 0;
+    try {
+      for (let i = 0; i < player.buffered.length; i++) {
+        if (player.buffered.start(i) <= t && player.buffered.end(i) >= t) {
+          bufferedEnd = player.buffered.end(i);
+          break;
+        }
+      }
+    } catch (_) { /* buffered throws while the element is empty */ }
+    seekBuffered.style.width = d ? Math.min(100, (bufferedEnd / d) * 100) + '%' : '0%';
+  }
+
+  function showSeekBar(on) {
+    seekBar.classList.toggle('hidden', !on);
+    if (on) updateSeekUI();
+  }
+
+  // ── Seek sync ────────────────────────────────────────────────────────────────
+  // Programmatic seeks must not be echoed back to the server. The old boolean
+  // flag stayed armed whenever a seek produced no `seeked` event (e.g. the value
+  // didn't change), which then swallowed the admin's next real scrub.
+
   let seekTimer = null;
-  let ignoreSeeked = false;
+  let suppressSeekUntil = 0;
+
+  function suppressSeekSync(ms) {
+    suppressSeekUntil = Date.now() + (ms || 600);
+  }
+
   player.addEventListener('seeked', () => {
-    if (ignoreSeeked) { ignoreSeeked = false; return; }
+    if (Date.now() < suppressSeekUntil) return;
     clearTimeout(seekTimer);
     seekTimer = setTimeout(() => {
       socket.emit('admin:seek', { password: adminPassword, currentTime: player.currentTime });
     }, 200);
+  });
+
+  // Keep the server in step when the admin uses the native controls.
+  player.addEventListener('play', () => {
+    if (!socket || Date.now() < suppressSeekUntil) return;
+    socket.emit('admin:play', { password: adminPassword, currentTime: player.currentTime });
+    setStateUI(true);
+  });
+
+  player.addEventListener('pause', () => {
+    if (!socket || Date.now() < suppressSeekUntil || player.ended) return;
+    socket.emit('admin:pause', { password: adminPassword, currentTime: player.currentTime });
+    setStateUI(false);
+  });
+
+  // Without this the server keeps advancing its clock past the end of the film
+  // and every viewer sits in an endless "korekcja synchronizacji" loop.
+  player.addEventListener('ended', () => {
+    if (!socket) return;
+    const end = Number.isFinite(player.duration) ? player.duration : player.currentTime;
+    socket.emit('admin:pause', { password: adminPassword, currentTime: end });
+    stateDot.className = 'dot yellow';
+    stateLabel.textContent = 'Koniec filmu';
   });
 
   // ── State UI ──────────────────────────────────────────────────────────────────
@@ -585,41 +1174,73 @@
     }
   }
 
+  // The admin drives the state, so the 3s heartbeat should only nudge the local
+  // player when it is genuinely out of step (e.g. a second admin tab took over).
+  // Applying it unconditionally re-seeked the video every three seconds.
+  const ADMIN_DRIFT_TOLERANCE = 2; // seconds
+
   function updatePlayerState(state) {
-    if (!state.filename) return;
+    if (!state) return;
+
+    // Track which subtitle the server considers active, so the list buttons and
+    // the local rendering follow whatever any admin tab picked.
+    if (state.subtitle !== activeSubtitle) {
+      activeSubtitle = state.subtitle || null;
+      renderSubtitleList();
+    }
+    if (state.isEmbed || !state.filename) loadSubtitle(null);
+    else loadSubtitle(state.subtitle);
+    applyOffset(state.subtitleOffset || 0, { broadcast: false });
+
+    if (!state.filename) {
+      if (currentSrcKey || isEmbedMode) clearPlayer();
+      return;
+    }
+
     if (state.isEmbed) {
-      if (!isEmbedMode) showEmbed(state.filename);
-      // Sync YouTube player for admin if another admin changed state
+      if (!isEmbedMode || currentEmbedUrl !== state.filename) showEmbed(state.filename);
       if (ytPlayer && ytPlayer.seekTo) {
         const target = state.playing
           ? state.currentTime + (Date.now() - state.serverTime) / 1000
           : state.currentTime;
-        const current = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
-        if (Math.abs(current - target) > 2) {
-          ytPlayer.seekTo(target, true);
-        }
-        if (state.playing) {
-          const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-          if (playerState !== YT.PlayerState.PLAYING) ytPlayer.playVideo();
-        } else {
-          const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-          if (playerState === YT.PlayerState.PLAYING) ytPlayer.pauseVideo();
+        if (Math.abs(ytTime() - target) > ADMIN_DRIFT_TOLERANCE) ytPlayer.seekTo(target, true);
+        const playerState = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+        if (state.playing && playerState !== YT.PlayerState.PLAYING && playerState !== YT.PlayerState.BUFFERING) {
+          ytPlayer.playVideo();
+        } else if (!state.playing && playerState === YT.PlayerState.PLAYING) {
+          ytPlayer.pauseVideo();
         }
       }
       setStateUI(state.playing);
       return;
     }
+
     loadVideoForAdmin(state.filename, !!state.isExternal);
-    ignoreSeeked = true;
-    if (state.playing) {
-      const lag = (Date.now() - state.serverTime) / 1000;
-      player.currentTime = state.currentTime + lag;
-      if (player.paused) player.play().catch(() => {});
-    } else {
-      player.currentTime = state.currentTime;
+
+    // While the admin drags the scrubber his own position is the truth; the
+    // heartbeat still carries the pre-seek time and would yank it back.
+    if (scrubbing) { setStateUI(state.playing); return; }
+
+    const target = state.playing
+      ? state.currentTime + (Date.now() - state.serverTime) / 1000
+      : state.currentTime;
+
+    if (Math.abs(player.currentTime - target) > ADMIN_DRIFT_TOLERANCE) {
+      suppressSeekSync();
+      player.currentTime = target;
+    }
+
+    if (state.playing && player.paused) {
+      suppressSeekSync();
+      player.play().catch(() => {});
+    } else if (!state.playing && !player.paused) {
+      suppressSeekSync();
       player.pause();
     }
+
     setStateUI(state.playing);
   }
+
+  updateVolumeIcon(1);
 
 }());

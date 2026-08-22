@@ -357,3 +357,239 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 #embed-player.no-interact {
   pointer-events: none;
 }
+
+/* ── tap-to-play overlay (autoplay policy) ── */
+.tap-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .6rem;
+  background: rgba(0,0,0,.62);
+  backdrop-filter: blur(2px);
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  padding: 1rem;
+}
+.tap-overlay svg { color: var(--accent); }
+.tap-overlay span { font-size: 1rem; font-weight: 600; }
+.tap-overlay small { font-size: .78rem; color: var(--muted); }
+.tap-overlay:hover { background: rgba(0,0,0,.72); }
+
+/* ── library rows (admin) ── */
+.library-row {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  background: rgba(0,0,0,.2);
+  border-radius: var(--radius);
+  padding: .45rem .6rem;
+}
+.library-row__name {
+  flex: 1;
+  min-width: 0;
+  font-size: .85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-row__size { font-size: .72rem; color: var(--muted); flex-shrink: 0; }
+.library-row .btn { flex-shrink: 0; }
+.btn-danger { background: transparent; color: var(--muted); border: 1px solid #444; }
+.btn-danger:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+
+/* ── layout helpers ── */
+.flex-wrap { flex-wrap: wrap; }
+
+/* ── fallback for frames the remote site refuses to render ── */
+.embed-fallback {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+  padding: .5rem .9rem;
+  background: rgba(13,13,13,.88);
+  border-bottom: 1px solid #333;
+  font-size: .8rem;
+  color: var(--muted);
+  text-align: center;
+}
+.embed-fallback a { font-weight: 600; white-space: nowrap; }
+
+/* ── subtitles ── */
+.subtitle-layer {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 3.25rem;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .25rem;
+  padding: 0 5%;
+  pointer-events: none;
+  text-align: center;
+}
+
+.subtitle-line {
+  display: inline-block;
+  max-width: 100%;
+  padding: .18em .55em;
+  background: rgba(0,0,0,.72);
+  border-radius: 4px;
+  color: #fff;
+  font-size: clamp(.95rem, 2.4vw, 1.6rem);
+  font-weight: 600;
+  line-height: 1.35;
+  text-shadow: 0 1px 3px rgba(0,0,0,.9);
+  text-wrap: balance;
+}
+
+/* Fullscreen has far more room – scale with the viewport instead of the card. */
+.video-wrap:fullscreen .subtitle-line { font-size: clamp(1.2rem, 2.8vw, 2.4rem); }
+.video-wrap:fullscreen .subtitle-layer { bottom: 4.5rem; }
+
+.btn-cc {
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .05em;
+  padding: .4rem .5rem;
+  line-height: 1;
+}
+.btn-cc[aria-pressed="false"] { opacity: .45; }
+
+/* ── subtitle offset control (admin) ── */
+.sub-offset {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.sub-offset input[type="number"] {
+  width: 6rem;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: .4rem .6rem;
+  font-size: .9rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── seek bar (admin) ── */
+.seek-bar {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+}
+
+.seek-bar__time {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: .8rem;
+  color: var(--muted);
+  min-width: 3.5rem;
+  flex-shrink: 0;
+}
+.seek-bar__time:last-child { text-align: right; }
+
+.seek-track {
+  position: relative;
+  flex: 1;
+  height: 18px;              /* generous hit area; the visible rail is thinner */
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;        /* let us handle the drag instead of scrolling */
+}
+.seek-track::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 5px;
+  background: #2a2a3e;
+  border-radius: 99px;
+}
+.seek-track__buffered,
+.seek-track__played {
+  position: absolute;
+  left: 0;
+  height: 5px;
+  border-radius: 99px;
+  width: 0;
+}
+.seek-track__buffered { background: #3d3d55; }
+.seek-track__played   { background: var(--accent); }
+
+.seek-track__thumb {
+  position: absolute;
+  left: 0;
+  width: 13px; height: 13px;
+  margin-left: -6.5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.6);
+  transform: scale(.75);
+  transition: transform .12s;
+}
+.seek-track:hover .seek-track__thumb,
+.seek-track:focus-visible .seek-track__thumb { transform: scale(1); }
+.seek-track:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 99px; }
+
+/* ── responsive ── */
+@media (max-width: 640px) {
+  header {
+    flex-wrap: wrap;
+    gap: .5rem;
+    padding: .7rem 1rem;
+  }
+  .header-logo { height: 2.6rem; margin-right: .35rem; }
+  header h1 { font-size: 1.05rem; letter-spacing: 0; }
+  header h1 span[style] { font-size: .8rem !important; }
+
+  /* The fixed pill sits on top of the header badge on narrow screens, and the
+     status strip under the player already says the same thing. */
+  #sync-indicator { display: none; }
+
+  .container { padding: 1rem .75rem; }
+  .card { padding: 1rem; }
+  .drop-zone { padding: 1.25rem 1rem; }
+
+  .timer-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: .4rem .9rem;
+    padding: .6rem .8rem;
+  }
+  .timer-bar__time { font-size: .95rem; }
+  .timer-bar .btn { flex: 1 1 100%; justify-content: center; }
+
+  .btn { padding: .5rem .9rem; font-size: .85rem; }
+
+  .library-row { flex-wrap: wrap; }
+  .library-row__name { flex: 1 1 100%; }
+
+  .sub-offset { justify-content: space-between; }
+
+  .video-controls { bottom: .5rem; right: .5rem; gap: .35rem; }
+  #volume-slider { width: 52px; }
+
+  .seek-bar { gap: .5rem; }
+  .seek-bar__time { min-width: 3rem; font-size: .72rem; }
+
+  .subtitle-layer { bottom: 2.75rem; padding: 0 3%; }
+}
+
+@media (max-width: 380px) {
+  .header-logo { height: 2.1rem; }
+  .seek-bar__time:last-child { display: none; }
+}

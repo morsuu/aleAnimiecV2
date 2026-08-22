@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>aleAnimiec – Oglądaj</title>
   <link rel="icon" href="/favicon.ico" />
-  <link href="data:image/x-icon;base64,AAABAAEAEBAAAAAAAABoBQAAFgAAACgAAAAQAAAAIAAAAAEACAAAAAAAAAEAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAOX/AAAA/wAA0+sAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAwMDAQEBAAAAAAAAAQMDAQEBAQEBAwEBAAAAAQMBAQICAgICAgEDAQEAAAEBAQICAgICAgICAQMBAAABAQICAQEDAwEBAgIBAQAAAAECAQEDAQEBAQMCAQAAAAAAAAMBAQEBAQEDAAAAAAAAAAABAwEBAQEDAQAAAAAAAAAAAAEDAQEBAQAAAAAAAAAAAAAAAQEBAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP//AAD//wAA8A8AAMADAACAAQAAAAAAAAAAAAAAAAAAgAEAAMADAADgBwAA8A8AAPgfAAD8PwAA//8AAP//AAA=" rel="icon" type="image/x-icon">
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -13,9 +12,14 @@
 <header>
   <img src="/logo.png" alt="Logo" class="header-logo" />
   <h1>ale<span>Animiec</span> <span style="font-weight:300;font-size:1rem">— oglądaj</span></h1>
-  <div class="badge">
-    <span class="dot" id="conn-dot"></span>
-    <span id="conn-label">Łączenie…</span>
+  <div style="display:flex;gap:.75rem;align-items:center">
+    <div class="badge">
+      <span class="dot" id="conn-dot"></span>
+      <span id="conn-label">Łączenie…</span>
+    </div>
+    <div class="badge" id="viewers-badge" title="Połączeni z pokojem">
+      👁 <span id="viewers-count">0</span>
+    </div>
   </div>
 </header>
 
@@ -29,6 +33,19 @@
       </svg>
       <span>Czekaj na film od admina…</span>
     </div>
+    <div class="subtitle-layer hidden" id="subtitle-layer"></div>
+    <div class="embed-fallback hidden" id="embed-fallback">
+      <span>Nie widzisz obrazu? Ten serwis blokuje osadzanie.</span>
+      <a id="embed-fallback-link" href="#" target="_blank" rel="noopener noreferrer">Otwórz w nowej karcie ↗</a>
+    </div>
+    <button type="button" class="tap-overlay hidden" id="tap-overlay">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+        <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.08"/>
+      </svg>
+      <span>Kliknij, aby oglądać z dźwiękiem</span>
+      <small>Przeglądarka blokuje automatyczne odtwarzanie z dźwiękiem</small>
+    </button>
     <div class="video-controls" id="video-controls">
       <div class="volume-control">
         <button class="btn-volume" id="btn-mute" title="Wycisz/Włącz dźwięk">
@@ -43,6 +60,7 @@
         </button>
         <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="1" />
       </div>
+      <button class="btn-fullscreen btn-cc hidden" id="btn-cc" title="Napisy włącz/wyłącz" aria-pressed="true">CC</button>
       <button class="btn-fullscreen" id="btn-fullscreen" title="Pełny ekran">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
@@ -86,6 +104,7 @@
     document.write('<script src="' + src + '"><\/script>');
   })();
 </script>
+<script src="/subtitles.js"></script>
 <script src="/viewer.js"></script>
 </body>
 </html>

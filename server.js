@@ -5,43 +5,187 @@ require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
+const dns = require('dns');
+const crypto = require('crypto');
 
 const express = require('express');
 const { Server } = require('socket.io');
 const multer = require('multer');
 
+const { normalizeToVtt, looksLikeSubtitles } = require('./lib/subtitle-format');
+const { createAttemptLimiter } = require('./lib/rate-limit');
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
-const FRONTEND_URL = process.env.FRONTEND_URL || ''; // e.g. https://ale-animiec.vercel.app
+const MAX_UPLOAD_BYTES = Math.round(parseFloat(process.env.MAX_UPLOAD_GB || '4') * 1024 * 1024 * 1024);
+
+if (process.env.NODE_ENV === 'production' && !process.env.ADMIN_PASSWORD) {
+  console.warn('[WARN] ADMIN_PASSWORD nie jest ustawione – używam domyślnego "admin". Ustaw je w zmiennych środowiskowych!');
+}
+
+/**
+ * FRONTEND_URL may list several origins, comma separated. Trailing slashes are
+ * stripped – an `Access-Control-Allow-Origin` that carries one never matches the
+ * browser's origin, which silently breaks every cross-origin request (uploads
+ * included).
+ */
+const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+// Escape hatch for Vercel preview deployments, whose origin changes per deploy.
+const ALLOW_ANY_ORIGIN = process.env.ALLOW_ANY_ORIGIN === '1' || ALLOWED_ORIGINS.length === 0;
+
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+  if (ALLOW_ANY_ORIGIN) return true;
+  return ALLOWED_ORIGINS.includes(origin.replace(/\/+$/, ''));
+}
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const STATE_FILE = path.join(UPLOADS_DIR, '.state.json');
+
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.ogg', '.ogv', '.mov', '.mkv', '.avi', '.m4v']);
+const SUBTITLE_EXTENSIONS = new Set(['.srt', '.vtt']);
+const MAX_SUBTITLE_BYTES = 5 * 1024 * 1024;
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+/** Constant-time password check, tolerant of missing / non-string input. */
+function isAdmin(password) {
+  if (typeof password !== 'string') return false;
+  const a = Buffer.from(password);
+  const b = Buffer.from(ADMIN_PASSWORD);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+// ── Brute force protection ──
+// The limiter guards every password check, not just /auth: the same password is
+// accepted by /videos, /upload, /subtitles and by the admin socket events, so
+// limiting one endpoint would only move the guessing somewhere else.
+
+const authLimiter = createAttemptLimiter();
+
+/** Small constant delay on a rejected password, to slow online guessing. */
+const AUTH_FAIL_DELAY_MS = 400;
+
+setInterval(() => authLimiter.sweep(), 10 * 60 * 1000).unref();
+
+function lockoutMessage(seconds) {
+  return `Zbyt wiele nieudanych prób. Spróbuj ponownie za ${seconds} s.`;
+}
+
+function requireAdmin(req, res, next) {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+  const wait = authLimiter.check(ip);
+  if (wait) {
+    res.set('Retry-After', String(wait));
+    return res.status(429).json({ error: lockoutMessage(wait), retryAfter: wait });
+  }
+
+  if (isAdmin(req.headers['x-admin-password'])) {
+    authLimiter.succeed(ip);
+    return next();
+  }
+
+  const locked = authLimiter.fail(ip);
+  setTimeout(() => {
+    if (res.writableEnded) return;
+    if (locked) {
+      res.set('Retry-After', String(locked));
+      return res.status(429).json({ error: lockoutMessage(locked), retryAfter: locked });
+    }
+    res.status(403).json({ error: 'Forbidden' });
+  }, AUTH_FAIL_DELAY_MS);
+}
 
 // ─── Video state ─────────────────────────────────────────────────────────────
 
-/** @type {{ filename: string|null, isExternal: boolean, isEmbed: boolean, isCineby: boolean, playing: boolean, currentTime: number, serverTime: number }} */
-let videoState = {
+const EMPTY_STATE = {
   filename: null,
   isExternal: false,
   isEmbed: false,
-  isCineby: false,
   playing: false,
   currentTime: 0,
+  // Active subtitle file (in uploads/) and its offset in seconds. A positive
+  // offset shows each line later, a negative one earlier.
+  subtitle: null,
+  subtitleOffset: 0,
   serverTime: Date.now(),
 };
+
+const MAX_SUBTITLE_OFFSET = 600; // seconds
+
+/** @type {typeof EMPTY_STATE} */
+let videoState = { ...EMPTY_STATE };
+
+// Restore the last state so a redeploy / cold start doesn't drop the session.
+try {
+  if (fs.existsSync(STATE_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (saved && typeof saved === 'object' && saved.filename) {
+      videoState = { ...EMPTY_STATE, ...saved, playing: false, serverTime: Date.now() };
+    }
+  }
+} catch (_) { /* corrupt state file – start fresh */ }
+
+let saveTimer = null;
+function persistState() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fs.writeFile(STATE_FILE, JSON.stringify(videoState), () => {});
+  }, 500);
+}
+
+/** Reject NaN / Infinity / negative times – one bad value desyncs every viewer. */
+function sanitizeTime(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+function setState(patch) {
+  // `serverTime` is the epoch the viewers extrapolate from, so it always moves
+  // to now. Re-base `currentTime` along with it, otherwise a patch that has
+  // nothing to do with playback (changing subtitles, say) rewinds the film for
+  // everyone by however long it had been playing.
+  const rebased = videoState.playing
+    ? { currentTime: videoState.currentTime + (Date.now() - videoState.serverTime) / 1000 }
+    : {};
+  videoState = { ...videoState, ...rebased, ...patch, serverTime: Date.now() };
+  persistState();
+}
 
 // ─── Express ─────────────────────────────────────────────────────────────────
 
 const app = express();
 
-// ─── CORS (allow frontend on different origin, e.g. Vercel) ──────────────────
+// Behind Render's proxy every request arrives from the same socket address, so
+// without this the rate limiter would put the whole internet in one bucket and
+// a single attacker could lock out the real admin. Trusting exactly one hop
+// makes req.ip the address Render's edge appended, which a client cannot forge.
+const TRUST_PROXY = process.env.TRUST_PROXY
+  || (process.env.RENDER || process.env.RENDER_EXTERNAL_URL ? '1' : '');
+if (TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? Number(TRUST_PROXY) : TRUST_PROXY);
+
+// ─── CORS (frontend lives on a different origin, e.g. Vercel) ────────────────
 app.use((req, res, next) => {
-  const origin = FRONTEND_URL || req.headers.origin || '*';
-  res.header('Access-Control-Allow-Origin', origin);
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  const origin = req.headers.origin;
+  if (isAllowedOrigin(origin)) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+  }
+  res.header('Vary', 'Origin');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, x-admin-password');
+  res.header('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -50,8 +194,14 @@ app.get('/health', (req, res) => res.sendStatus(200));
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve uploaded videos
-app.use('/uploads', express.static(UPLOADS_DIR));
+// Serve uploaded videos (dotfiles – including .state.json – stay hidden)
+app.use('/uploads', express.static(UPLOADS_DIR, { dotfiles: 'ignore' }));
+
+// ─── Admin auth check ────────────────────────────────────────────────────────
+// The admin panel used to probe /upload with an empty body to test the password,
+// which meant any 5xx from the server read as "logged in". This is explicit.
+
+app.post('/auth', requireAdmin, (req, res) => res.json({ ok: true, maxUploadBytes: MAX_UPLOAD_BYTES }));
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
@@ -59,84 +209,200 @@ const storage = multer.diskStorage({
   destination: UPLOADS_DIR,
   filename(req, file, cb) {
     // Sanitize filename: keep extension, strip directory traversal chars
-    const ext = path.extname(file.originalname).toLowerCase().replace(/[^.a-z0-9]/g, '');
+    const rawExt = path.extname(file.originalname).toLowerCase();
+    const ext = VIDEO_EXTENSIONS.has(rawExt) ? rawExt : '.mp4';
     const base = path.basename(file.originalname, path.extname(file.originalname))
       .replace(/[^a-zA-Z0-9_\- ]/g, '_')
-      .slice(0, 80);
+      .slice(0, 80) || 'video';
     cb(null, `${Date.now()}_${base}${ext}`);
   },
 });
 
-const ALLOWED_MIMETYPES = new Set([
-  'video/mp4',
-  'video/webm',
-  'video/ogg',
-  'video/quicktime',
-  'video/x-matroska',
-  'video/x-msvideo',
-]);
-
 const upload = multer({
   storage,
   fileFilter(req, file, cb) {
-    if (ALLOWED_MIMETYPES.has(file.mimetype)) {
+    // Browsers are inconsistent about video mimetypes (.mkv and .avi often come
+    // through as application/octet-stream or an empty string), so accept on
+    // either a video/* mimetype or a known video extension.
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mimeOk = typeof file.mimetype === 'string' && file.mimetype.startsWith('video/');
+    if (mimeOk || VIDEO_EXTENSIONS.has(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Only video files are allowed'));
+      const err = new Error('Dozwolone są tylko pliki video');
+      err.code = 'INVALID_FILE_TYPE';
+      cb(err);
     }
   },
-  limits: { fileSize: 4 * 1024 * 1024 * 1024 }, // 4 GB max
+  limits: { fileSize: MAX_UPLOAD_BYTES },
 });
 
-app.post('/upload', (req, res, next) => {
-  if (req.headers['x-admin-password'] !== ADMIN_PASSWORD) {
-    return res.status(403).json({ error: 'Forbidden' });
+/** Human readable upload limit, for error messages. */
+const MAX_UPLOAD_LABEL = MAX_UPLOAD_BYTES >= 1024 * 1024 * 1024
+  ? `${(MAX_UPLOAD_BYTES / 1024 / 1024 / 1024).toFixed(1)} GB`
+  : `${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`;
+
+app.post('/upload', requireAdmin, (req, res, next) => {
+  // Reject on Content-Length before a single byte hits the disk – letting multer
+  // discover the overflow mid-stream tears down the connection and the panel
+  // never gets to read the error.
+  const declared = parseInt(req.headers['content-length'] || '0', 10);
+  if (declared && declared > MAX_UPLOAD_BYTES + 65536) {
+    res.set('Connection', 'close');
+    return res.status(413).json({ error: `Plik jest za duży (limit ${MAX_UPLOAD_LABEL})` });
   }
   next();
 }, upload.single('video'), (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
-  videoState = {
-    filename: file.filename,
-    isExternal: false,
-    isEmbed: false,
-    isCineby: false,
-    playing: false,
-    currentTime: 0,
-    serverTime: Date.now(),
-  };
+  setState({ ...EMPTY_STATE, filename: file.filename });
 
-  io.emit('video:loaded', { filename: file.filename, isExternal: false, isCineby: false });
-  res.json({ filename: file.filename });
+  io.emit('video:loaded', { filename: file.filename, isExternal: false, isEmbed: false });
+  io.emit('sync:state', currentState());
+  res.json({ filename: file.filename, size: file.size });
+});
+
+// ─── Video library ───────────────────────────────────────────────────────────
+// Without this the admin panel lost every uploaded file on page reload.
+
+/** Resolve a user-supplied name to a path inside UPLOADS_DIR, or null. */
+function safeUploadPath(name) {
+  if (typeof name !== 'string' || !name || name.startsWith('.')) return null;
+  const base = path.basename(name);
+  if (base !== name) return null;
+  const full = path.join(UPLOADS_DIR, base);
+  if (path.dirname(full) !== UPLOADS_DIR) return null;
+  return full;
+}
+
+app.get('/videos', requireAdmin, (req, res) => {
+  fs.readdir(UPLOADS_DIR, { withFileTypes: true }, (err, entries) => {
+    if (err) return res.status(500).json({ error: 'Nie udało się odczytać katalogu' });
+    const files = entries
+      .filter((e) => e.isFile() && !e.name.startsWith('.') && VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
+      .map((e) => {
+        let size = 0;
+        let mtime = 0;
+        try {
+          const st = fs.statSync(path.join(UPLOADS_DIR, e.name));
+          size = st.size;
+          mtime = st.mtimeMs;
+        } catch (_) { /* file vanished between readdir and stat */ }
+        return { name: e.name, size, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    res.json({ files });
+  });
+});
+
+app.delete('/videos/:name', requireAdmin, (req, res) => {
+  const full = safeUploadPath(req.params.name);
+  if (!full) return res.status(400).json({ error: 'Nieprawidłowa nazwa pliku' });
+
+  fs.unlink(full, (err) => {
+    if (err) {
+      return res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Nie udało się usunąć pliku' });
+    }
+    // If the deleted file was on air, clear the state so viewers stop 404-ing.
+    if (videoState.filename === req.params.name && !videoState.isExternal) {
+      setState({ ...EMPTY_STATE });
+      io.emit('video:cleared');
+      io.emit('sync:state', currentState());
+    }
+    res.json({ ok: true });
+  });
+});
+
+// ─── Subtitles ───────────────────────────────────────────────────────────────
+// Everything is normalised to WebVTT on the way in, so the players only ever
+// deal with one format. Conversion lives in lib/ so it can be unit tested.
+
+const subtitleUpload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter(req, file, cb) {
+    if (SUBTITLE_EXTENSIONS.has(path.extname(file.originalname).toLowerCase())) {
+      cb(null, true);
+    } else {
+      const err = new Error('Dozwolone są tylko pliki .srt i .vtt');
+      err.code = 'INVALID_FILE_TYPE';
+      cb(err);
+    }
+  },
+  limits: { fileSize: MAX_SUBTITLE_BYTES },
+});
+
+app.post('/subtitles', requireAdmin, subtitleUpload.single('subtitle'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Nie wysłano pliku' });
+
+  let vtt;
+  try {
+    vtt = normalizeToVtt(req.file.buffer, req.file.originalname);
+  } catch (_) {
+    return res.status(422).json({ error: 'Nie udało się odczytać pliku napisów' });
+  }
+  if (!looksLikeSubtitles(vtt)) {
+    return res.status(422).json({ error: 'Plik nie wygląda na napisy (brak znaczników czasu)' });
+  }
+
+  const base = path.basename(req.file.originalname, path.extname(req.file.originalname))
+    .replace(/[^a-zA-Z0-9_\- ]/g, '_')
+    .slice(0, 80) || 'napisy';
+  const name = `${Date.now()}_${base}.vtt`;
+
+  fs.writeFile(path.join(UPLOADS_DIR, name), vtt, 'utf8', (err) => {
+    if (err) return res.status(500).json({ error: 'Nie udało się zapisać napisów' });
+    // A fresh upload becomes the active track right away.
+    setState({ subtitle: name, subtitleOffset: 0 });
+    io.emit('sync:state', currentState());
+    io.emit('subtitles:changed');
+    res.json({ name });
+  });
+});
+
+app.get('/subtitles', requireAdmin, (req, res) => {
+  fs.readdir(UPLOADS_DIR, { withFileTypes: true }, (err, entries) => {
+    if (err) return res.status(500).json({ error: 'Nie udało się odczytać katalogu' });
+    const files = entries
+      .filter((e) => e.isFile() && !e.name.startsWith('.') && path.extname(e.name).toLowerCase() === '.vtt')
+      .map((e) => {
+        let mtime = 0;
+        try { mtime = fs.statSync(path.join(UPLOADS_DIR, e.name)).mtimeMs; } catch (_) {}
+        return { name: e.name, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    res.json({ files });
+  });
+});
+
+app.delete('/subtitles/:name', requireAdmin, (req, res) => {
+  const full = safeUploadPath(req.params.name);
+  if (!full || path.extname(req.params.name).toLowerCase() !== '.vtt') {
+    return res.status(400).json({ error: 'Nieprawidłowa nazwa pliku' });
+  }
+  fs.unlink(full, (err) => {
+    if (err) {
+      return res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Nie udało się usunąć napisów' });
+    }
+    if (videoState.subtitle === req.params.name) {
+      setState({ subtitle: null, subtitleOffset: 0 });
+      io.emit('sync:state', currentState());
+    }
+    io.emit('subtitles:changed');
+    res.json({ ok: true });
+  });
 });
 
 // ─── Proxy for external videos ───────────────────────────────────────────────
 // Streams external video URLs through the server so that CORS / header issues
 // (e.g. pixeldrain, Google Drive, Dropbox) don't block playback in <video>.
 
-const https = require('https');
+const MAX_PROXY_HOPS = 5;
+const PROXY_TIMEOUT_MS = 20000;
 
-app.get('/proxy', (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl || typeof targetUrl !== 'string') {
-    return res.status(400).json({ error: 'Missing url parameter' });
-  }
-  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-    return res.status(400).json({ error: 'Only http/https URLs are allowed' });
-  }
-
-  // Validate URL to avoid SSRF on private IPs
-  let parsed;
-  try {
-    parsed = new URL(targetUrl);
-  } catch (_) {
-    return res.status(400).json({ error: 'Invalid URL' });
-  }
-
-  // Block requests to private/internal networks
-  const hostname = parsed.hostname;
-  if (
+/** Block hostnames that point at the local machine or a private network. */
+function isPrivateHost(hostname) {
+  return (
     hostname === 'localhost' ||
     hostname === '127.0.0.1' ||
     hostname === '::1' ||
@@ -144,46 +410,84 @@ app.get('/proxy', (req, res) => {
     hostname.endsWith('.local') ||
     hostname.endsWith('.internal') ||
     /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.)/.test(hostname) ||
-    /^f[cd][0-9a-f]{2}:/i.test(hostname) || // IPv6 private
-    /^fe80:/i.test(hostname) // IPv6 link-local
-  ) {
+    /^f[cd][0-9a-f]{2}:/i.test(hostname) ||
+    /^fe80:/i.test(hostname)
+  );
+}
+
+function isPrivateAddress(address) {
+  return (
+    /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.)/.test(address) ||
+    address === '::1' ||
+    /^f[cd][0-9a-f]{2}:/i.test(address) ||
+    /^fe80:/i.test(address)
+  );
+}
+
+app.get('/proxy', (req, res) => {
+  const targetUrl = req.query.url;
+  const hops = parseInt(req.query.hops || '0', 10) || 0;
+
+  if (!targetUrl || typeof targetUrl !== 'string') {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+  if (hops > MAX_PROXY_HOPS) {
+    return res.status(508).json({ error: 'Zbyt wiele przekierowań' });
+  }
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    return res.status(400).json({ error: 'Only http/https URLs are allowed' });
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(targetUrl);
+  } catch (_) {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+
+  if (isPrivateHost(parsed.hostname)) {
     return res.status(403).json({ error: 'Requests to private/internal networks are not allowed' });
   }
 
-  const isHttps = parsed.protocol === 'https:';
-  const lib = isHttps ? https : http;
+  const lib = parsed.protocol === 'https:' ? https : http;
 
   // Forward range header for seeking support
   const headers = { 'User-Agent': 'aleAnimiec/1.0' };
-  if (req.headers.range) {
-    headers['Range'] = req.headers.range;
-  }
+  if (req.headers.range) headers['Range'] = req.headers.range;
 
-  const proxyReq = lib.get(targetUrl, { headers, lookup: (hostname, opts, cb) => {
-    // Use DNS lookup callback to block resolved private IPs
-    const dns = require('dns');
-    dns.lookup(hostname, opts, (err, address, family) => {
-      if (err) return cb(err);
-      if (
-        /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.)/.test(address) ||
-        address === '::1' ||
-        /^f[cd][0-9a-f]{2}:/i.test(address) ||
-        /^fe80:/i.test(address)
-      ) {
-        return cb(new Error('Resolved to a private IP address'));
-      }
-      cb(null, address, family);
-    });
-  } }, (proxyRes) => {
-    // Follow redirects (up to 5)
+  const options = {
+    headers,
+    lookup: (hostname, opts, cb) => {
+      // Re-check the resolved address so a DNS record pointing at a private IP
+      // can't slip past the hostname check above.
+      dns.lookup(hostname, opts, (err, address, family) => {
+        if (err) return cb(err);
+        if (Array.isArray(address)) {
+          if (address.some((a) => isPrivateAddress(a.address))) {
+            return cb(new Error('Resolved to a private IP address'));
+          }
+          return cb(null, address);
+        }
+        if (isPrivateAddress(address)) return cb(new Error('Resolved to a private IP address'));
+        cb(null, address, family);
+      });
+    },
+  };
+
+  const proxyReq = lib.get(targetUrl, options, (proxyRes) => {
     if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
-      // Redirect – re-issue request to the new URL
-      res.redirect(307, `/proxy?url=${encodeURIComponent(proxyRes.headers.location)}`);
       proxyRes.resume();
-      return;
+      // `location` is often relative – resolve it against the URL we just
+      // requested, otherwise the next hop fails the http/https check.
+      let next;
+      try {
+        next = new URL(proxyRes.headers.location, targetUrl).href;
+      } catch (_) {
+        return res.status(502).json({ error: 'Nieprawidłowe przekierowanie' });
+      }
+      return res.redirect(307, `/proxy?hops=${hops + 1}&url=${encodeURIComponent(next)}`);
     }
 
-    // Forward relevant headers
     const fwdHeaders = {};
     if (proxyRes.headers['content-type']) fwdHeaders['Content-Type'] = proxyRes.headers['content-type'];
     if (proxyRes.headers['content-length']) fwdHeaders['Content-Length'] = proxyRes.headers['content-length'];
@@ -192,28 +496,50 @@ app.get('/proxy', (req, res) => {
 
     res.writeHead(proxyRes.statusCode, fwdHeaders);
     proxyRes.pipe(res);
+    proxyRes.on('error', () => res.destroy());
   });
 
-  proxyReq.on('error', (err) => {
-    if (!res.headersSent) {
-      res.status(502).json({ error: 'Failed to fetch external video' });
-    }
+  proxyReq.setTimeout(PROXY_TIMEOUT_MS, () => proxyReq.destroy(new Error('Upstream timeout')));
+
+  proxyReq.on('error', () => {
+    if (!res.headersSent) res.status(502).json({ error: 'Failed to fetch external video' });
+    else res.destroy();
   });
 
-  req.on('close', () => {
-    proxyReq.destroy();
-  });
+  res.on('close', () => proxyReq.destroy());
+});
+
+// ─── Error handler ───────────────────────────────────────────────────────────
+// Multer rejections (file too large, wrong type) used to fall through to
+// Express' default handler, which answers with an HTML 500 the panel can't read.
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  // The client may still be streaming its body; close rather than wait it out.
+  if (req.method === 'POST') res.set('Connection', 'close');
+  if (err && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: `Plik jest za duży (limit ${MAX_UPLOAD_LABEL})` });
+  }
+  if (err && err.code === 'INVALID_FILE_TYPE') {
+    return res.status(415).json({ error: err.message });
+  }
+  console.error('[error]', err && err.message);
+  res.status(500).json({ error: 'Błąd serwera' });
 });
 
 // ─── HTTP server ─────────────────────────────────────────────────────────────
 
 const server = http.createServer(app);
 
+// Long uploads must not be cut off by the default request timeout.
+server.requestTimeout = 0;
+server.headersTimeout = 120000;
+
 // ─── Socket.io ───────────────────────────────────────────────────────────────
 
 const io = new Server(server, {
   cors: {
-    origin: FRONTEND_URL || true,
+    origin(origin, cb) { cb(null, !origin || isAllowedOrigin(origin)); },
     methods: ['GET', 'POST'],
   },
 });
@@ -228,9 +554,12 @@ function currentState() {
   return { ...videoState };
 }
 
-/** Broadcast viewer count to all connected clients. */
+/**
+ * Broadcast viewer count. Deferred by a tick because on 'disconnect' the socket
+ * is still counted, which made the badge read one too high.
+ */
 function broadcastViewerCount() {
-  io.emit('viewers:count', io.engine.clientsCount);
+  setTimeout(() => io.emit('viewers:count', io.engine.clientsCount), 0);
 }
 
 // ── Periodic heartbeat: broadcast state every 3s for tight sync ────────────
@@ -240,9 +569,43 @@ setInterval(() => {
   }
 }, 3000);
 
+/**
+ * Password gate for socket commands, sharing the HTTP limiter's counters so an
+ * attacker can't dodge the lockout by switching from fetch() to socket.io.
+ */
+function socketIp(socket) {
+  const fwd = socket.handshake.headers['x-forwarded-for'];
+  if (TRUST_PROXY && typeof fwd === 'string' && fwd) {
+    // Rightmost entry is the one our own proxy appended.
+    return fwd.split(',').pop().trim();
+  }
+  return socket.handshake.address || 'unknown';
+}
+
+function adminOk(socket, msg) {
+  if (!msg) return false;
+  const ip = socketIp(socket);
+
+  const wait = authLimiter.check(ip);
+  if (wait) {
+    socket.emit('admin:error', { message: lockoutMessage(wait) });
+    return false;
+  }
+  if (isAdmin(msg.password)) {
+    authLimiter.succeed(ip);
+    return true;
+  }
+
+  const locked = authLimiter.fail(ip);
+  socket.emit('admin:error', {
+    message: locked ? lockoutMessage(locked) : 'Odrzucono: nieprawidłowe hasło admina.',
+  });
+  return false;
+}
+
 io.on('connection', (socket) => {
   broadcastViewerCount();
-  socket.on('disconnect', () => broadcastViewerCount());
+  socket.on('disconnect', broadcastViewerCount);
 
   // Immediately send the current state so the viewer can sync
   socket.emit('sync:state', currentState());
@@ -263,114 +626,95 @@ io.on('connection', (socket) => {
 
   // ── Admin events (password-checked) ──────────────────────────────────────
 
-  socket.on('admin:play', ({ password, currentTime }) => {
-    if (password !== ADMIN_PASSWORD) return;
-    videoState = {
-      ...videoState,
-      playing: true,
-      currentTime,
-      serverTime: Date.now(),
-    };
+  socket.on('admin:play', (msg) => {
+    if (!adminOk(socket, msg)) return;
+    setState({ playing: true, currentTime: sanitizeTime(msg.currentTime) });
     io.emit('sync:state', currentState());
   });
 
-  socket.on('admin:pause', ({ password, currentTime }) => {
-    if (password !== ADMIN_PASSWORD) return;
-    videoState = {
-      ...videoState,
-      playing: false,
-      currentTime,
-      serverTime: Date.now(),
-    };
+  socket.on('admin:pause', (msg) => {
+    if (!adminOk(socket, msg)) return;
+    setState({ playing: false, currentTime: sanitizeTime(msg.currentTime) });
     io.emit('sync:state', currentState());
   });
 
-  socket.on('admin:seek', ({ password, currentTime }) => {
-    if (password !== ADMIN_PASSWORD) return;
-    videoState = {
-      ...videoState,
-      currentTime,
-      serverTime: Date.now(),
-    };
+  socket.on('admin:seek', (msg) => {
+    if (!adminOk(socket, msg)) return;
+    setState({ currentTime: sanitizeTime(msg.currentTime) });
     io.emit('sync:state', currentState());
   });
 
-  socket.on('admin:load', ({ password, filename }) => {
-    if (password !== ADMIN_PASSWORD) return;
-    videoState = {
-      filename,
-      isExternal: false,
-      isEmbed: false,
-      isCineby: false,
-      playing: false,
-      currentTime: 0,
-      serverTime: Date.now(),
-    };
-    io.emit('video:loaded', { filename, isExternal: false, isEmbed: false, isCineby: false });
+  socket.on('admin:load', (msg) => {
+    if (!adminOk(socket, msg)) return;
+    // Only serve files that actually exist in uploads/
+    const full = safeUploadPath(msg.filename);
+    if (!full || !fs.existsSync(full)) {
+      socket.emit('admin:error', { message: 'Nie znaleziono pliku na serwerze' });
+      return;
+    }
+    setState({ ...EMPTY_STATE, filename: msg.filename });
+    io.emit('video:loaded', { filename: msg.filename, isExternal: false, isEmbed: false });
     io.emit('sync:state', currentState());
   });
 
-  socket.on('admin:load-url', ({ password, url }) => {
-    if (password !== ADMIN_PASSWORD) return;
-    if (!url || typeof url !== 'string') return;
-    // Only allow http/https URLs
-    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
-    videoState = {
-      filename: url,
-      isExternal: true,
-      isEmbed: false,
-      isCineby: false,
-      playing: false,
-      currentTime: 0,
-      serverTime: Date.now(),
-    };
-    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: false, isCineby: false });
-    io.emit('sync:state', currentState());
-  });
-
-  socket.on('admin:load-embed', ({ password, url }) => {
-    if (password !== ADMIN_PASSWORD) return;
+  /** Shared handler for the URL-based load events. */
+  function loadUrl(msg, isEmbed) {
+    if (!adminOk(socket, msg)) return;
+    const url = msg.url;
     if (!url || typeof url !== 'string') return;
     if (!url.startsWith('http://') && !url.startsWith('https://')) return;
-    videoState = {
-      filename: url,
-      isExternal: true,
-      isEmbed: true,
-      isCineby: false,
-      playing: false,
-      currentTime: 0,
-      serverTime: Date.now(),
-    };
-    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: true, isCineby: false });
+    setState({ ...EMPTY_STATE, filename: url, isExternal: true, isEmbed });
+    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed });
+    io.emit('sync:state', currentState());
+  }
+
+  socket.on('admin:load-url',   (msg) => loadUrl(msg, false));
+  socket.on('admin:load-embed', (msg) => loadUrl(msg, true));
+
+  // ── Subtitles ────────────────────────────────────────────────────────────
+
+  socket.on('admin:subtitle', (msg) => {
+    if (!adminOk(socket, msg)) return;
+    if (msg.file === null) {
+      setState({ subtitle: null, subtitleOffset: 0 });
+    } else {
+      const full = safeUploadPath(msg.file);
+      if (!full || path.extname(String(msg.file)).toLowerCase() !== '.vtt' || !fs.existsSync(full)) {
+        socket.emit('admin:error', { message: 'Nie znaleziono pliku napisów' });
+        return;
+      }
+      setState({ subtitle: msg.file, subtitleOffset: 0 });
+    }
     io.emit('sync:state', currentState());
   });
 
-  socket.on('admin:load-cineby', ({ password, url }) => {
-    if (password !== ADMIN_PASSWORD) return;
-    if (!url || typeof url !== 'string') return;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
-    videoState = {
-      filename: url,
-      isExternal: true,
-      isEmbed: true,
-      isCineby: true,
-      playing: false,
-      currentTime: 0,
-      serverTime: Date.now(),
-    };
-    io.emit('video:loaded', { filename: url, isExternal: true, isEmbed: true, isCineby: true });
+  socket.on('admin:subtitle-offset', (msg) => {
+    if (!adminOk(socket, msg)) return;
+    const raw = Number(msg.offset);
+    if (!Number.isFinite(raw)) return;
+    const offset = Math.max(-MAX_SUBTITLE_OFFSET, Math.min(MAX_SUBTITLE_OFFSET, raw));
+    setState({ subtitleOffset: offset });
+    // Nudging the offset happens continuously while dragging, so send just the
+    // one number instead of a full state broadcast that would re-seek everyone.
+    io.emit('subtitles:offset', { offset });
+  });
+
+  socket.on('admin:clear', (msg) => {
+    if (!adminOk(socket, msg)) return;
+    setState({ ...EMPTY_STATE });
+    io.emit('video:cleared');
     io.emit('sync:state', currentState());
   });
 });
 
 // ─── Keep-alive self-ping (prevents Render free tier from sleeping) ──────────
 
-const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || '';
+const SELF_URL = (process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || '').replace(/\/+$/, '');
 if (SELF_URL) {
   const KEEP_ALIVE_INTERVAL = 10 * 60 * 1000; // every 10 minutes
   setInterval(() => {
     const lib = SELF_URL.startsWith('https') ? https : http;
-    lib.get(`${SELF_URL}/`, (res) => { res.resume(); }).on('error', () => {});
+    lib.get(`${SELF_URL}/health`, (res) => { res.resume(); }).on('error', () => {});
   }, KEEP_ALIVE_INTERVAL);
 }
 
@@ -379,4 +723,5 @@ if (SELF_URL) {
 server.listen(PORT, () => {
   console.log(`Server running → http://localhost:${PORT}`);
   console.log(`Admin panel   → http://localhost:${PORT}/admin.html`);
+  console.log(`CORS          → ${ALLOW_ANY_ORIGIN ? 'dowolne origin' : ALLOWED_ORIGINS.join(', ')}`);
 });
