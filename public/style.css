@@ -545,6 +545,14 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .seek-track:focus-visible .seek-track__thumb { transform: scale(1); }
 .seek-track:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 99px; }
 
+/* ── link do panelu admina (strona widza) ── */
+.admin-link {
+  flex-shrink: 0;
+  white-space: nowrap;
+  gap: .35rem;
+}
+.admin-link:hover { border-color: var(--accent); color: var(--accent); }
+
 /* ── responsive ── */
 @media (max-width: 640px) {
   header {
@@ -579,6 +587,10 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
   .library-row__name { flex: 1 1 100%; }
 
   .sub-offset { justify-content: space-between; }
+
+  /* Sam symbol wystarczy – nagłówek na telefonie nie ma miejsca na etykietę. */
+  .admin-link__text { display: none; }
+  .admin-link { padding: .4rem .55rem; }
 
   .video-controls { bottom: .5rem; right: .5rem; gap: .35rem; }
   #volume-slider { width: 52px; }
