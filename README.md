@@ -101,9 +101,12 @@ Gdy `FRONTEND_URL` jest puste, dozwolone są wszystkie originy.
 | `POST` | `/subtitles` | Wgranie napisów (pole `subtitle`, .srt lub .vtt) |
 | `GET` | `/subtitles` | Lista wgranych napisów |
 | `DELETE` | `/subtitles/:name` | Usunięcie napisów |
+| `GET` | `/uploads/…vtt?offset=N` | Napisy z wliczonym przesunięciem (dla odbiornika Cast) |
 | `GET` | `/proxy?url=…` | Streamowanie zewnętrznego URL (omija CORS, blokuje SSRF) |
 
-Wszystkie poza `/health` i `/proxy` wymagają nagłówka `x-admin-password`.
+Wszystkie poza `/health`, `/proxy` i `/uploads` wymagają nagłówka
+`x-admin-password`. `/uploads` musi zostać publiczne, bo pobiera z niego zarówno
+przeglądarka widza, jak i odbiornik Chromecasta.
 
 Nie ma osobnego endpointu logowania: ekran w panelu przyjmuje hasło bez
 weryfikacji, a błędne hasło objawia się dopiero tym, że serwer odrzuca komendy
@@ -145,6 +148,33 @@ linie w tym samym momencie.
   `requestAnimationFrame` zatrzymuje się w karcie w tle.
 - Napisy działają dla wgranych plików i bezpośrednich linków do wideo.
   Dla osadzonych playerów (YouTube, Twitch) nie ma gdzie ich narysować.
+
+## Cast (Chromecast)
+
+Widz może rzucić obraz na telewizor przyciskiem w kontrolkach odtwarzacza.
+Przycisk pojawia się tylko wtedy, gdy przeglądarka obsługuje Google Cast, w sieci
+jest urządzenie i gra **plik wideo** (nie osadzony player).
+
+**Synchronizacja jest luźniejsza.** Lokalnie trzymamy ±40 ms, mikrokorygując
+`playbackRate`. Odbiornik tego nie umie, więc jedynym narzędziem jest skok —
+korygujemy dopiero powyżej **2 s**, bo szarpnięcie na telewizorze widać
+znacznie bardziej niż sekundę przesunięcia. To dotyczy **wyłącznie osoby
+castującej**; reszta pokoju trzyma swoją dokładność.
+
+**Admin nie castuje.** Serwer bierze oś czasu z jego odtwarzacza, więc pozycja
+obarczona lagiem odbiornika przesunęłaby cały pokój. Jeśli admin chce oglądać na
+telewizorze, otwiera zwykłą stronę widza w drugiej karcie i castuje z niej.
+
+Szczegóły implementacji:
+
+- Chromecast pobiera plik i napisy **sam, prosto z backendu** — dlatego `/uploads`
+  zawsze odpowiada z `Access-Control-Allow-Origin: *` (te pliki i tak są publiczne).
+- Odbiornik nie zna offsetu napisów, więc przesunięcie musi być w pliku:
+  `GET /uploads/napisy.vtt?offset=1.5` zwraca ścieżkę z wliczonym przesunięciem.
+- Chromecast nie odtworzy `.mkv` ani `.avi`, choć przeglądarka je pokazuje —
+  w takim wypadku baner ostrzega zamiast pokazywać czarny ekran.
+- Cały moduł (`public/cast.js`) jest defensywny: gdy SDK się nie załaduje albo
+  przeglądarka nie zna Casta, przycisk po prostu się nie pojawia.
 
 ## Zdarzenia Socket.io
 

@@ -18,6 +18,11 @@
   const embedFallbackLink = document.getElementById('embed-fallback-link');
   const subtitleLayer = document.getElementById('subtitle-layer');
   const btnCc         = document.getElementById('btn-cc');
+  const btnCast       = document.getElementById('btn-cast');
+  const castBanner    = document.getElementById('cast-banner');
+  const castDevice    = document.getElementById('cast-device');
+  const castNote      = document.getElementById('cast-note');
+  const castStop      = document.getElementById('cast-stop');
 
   // connection UI
   const connDot   = document.getElementById('conn-dot');
@@ -606,6 +611,157 @@
     if (currentSrcKey) showLoadError();
   });
 
+  // ── Cast (Chromecast) ──────────────────────────────────────────────────────
+  // Only the viewer casts. The admin's player is what the server takes its
+  // timeline from, so a receiver's laggy position would drag the whole room.
+
+  // Well above the local 150 ms threshold: a seek on a TV is a visible jump,
+  // and there is no playbackRate trim to smooth things out remotely.
+  const CAST_DRIFT_THRESHOLD = 2;   // seconds
+  const CAST_SYNC_INTERVAL = 2000;  // ms
+
+  // Chrome plays these happily; a Chromecast will not.
+  const CAST_UNSUPPORTED = /\.(mkv|avi|ogv)$/i;
+
+  const CONTENT_TYPES = {
+    '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm',
+    '.ogg': 'video/ogg', '.ogv': 'video/ogg', '.mov': 'video/quicktime',
+  };
+
+  let casting = false;
+  let castAvailable = false;
+  let castLoading = false;
+
+  const castPlayer = window.CastPlayer ? window.CastPlayer.create({
+    onAvailabilityChange(available) {
+      castAvailable = available;
+      updateCastButton();
+    },
+    onConnected(name) {
+      casting = true;
+      castDevice.textContent = name;
+      castBanner.classList.remove('hidden');
+      updateCastButton();
+
+      // Stop pulling the file locally – the receiver fetches it itself.
+      player.pause();
+      subs.setVisible(false);
+      currentSrcKey = null;
+      player.removeAttribute('src');
+      player.load();
+
+      if (lastState) castApply(lastState);
+      setSyncStatus('casting');
+    },
+    onDisconnected() {
+      casting = false;
+      castLoading = false;
+      castBanner.classList.add('hidden');
+      castNote.textContent = '';
+      updateCastButton();
+
+      // Reload locally and pick the room's position back up.
+      currentSrcKey = null;
+      try { if (localStorage.getItem(CC_PREF_KEY) !== '0') subs.setVisible(true); } catch (_) { subs.setVisible(true); }
+      if (lastState) applyState(lastState);
+    },
+  }) : null;
+
+  if (castPlayer) castPlayer.load();
+
+  /** Cast makes sense only for a real video file we serve, never for embeds. */
+  function castPossible() {
+    return !!castPlayer && castAvailable && !!lastState && !!lastState.filename && !lastState.isEmbed;
+  }
+
+  function updateCastButton() {
+    btnCast.classList.toggle('hidden', !castPossible() && !casting);
+    btnCast.classList.toggle('is-active', casting);
+    btnCast.title = casting ? 'Zatrzymaj odtwarzanie na telewizorze' : 'Rzuć na telewizor (Chromecast)';
+  }
+
+  btnCast.addEventListener('click', () => {
+    if (!castPlayer) return;
+    if (casting) { castPlayer.stop(); return; }
+    castPlayer.requestSession().catch(() => { /* user dismissed the picker */ });
+  });
+
+  castStop.addEventListener('click', () => { if (castPlayer) castPlayer.stop(); });
+
+  /** Absolute URL – the receiver resolves nothing relative to our page. */
+  function absoluteUrl(relative) {
+    try { return new URL(relative, location.href).href; } catch (_) { return relative; }
+  }
+
+  function contentTypeFor(name) {
+    const dot = name.lastIndexOf('.');
+    const ext = dot === -1 ? '' : name.slice(dot).toLowerCase();
+    return CONTENT_TYPES[ext] || 'video/mp4';
+  }
+
+  /** Load (or reload) the room's media on the receiver when it changed. */
+  function castApply(state) {
+    if (!casting || !castPlayer || castLoading) return;
+    if (!state.filename || state.isEmbed) return;
+
+    const offset = state.subtitleOffset || 0;
+    const key = `${state.filename}|${state.subtitle || ''}|${offset}`;
+    if (key === castPlayer.currentKey()) return;
+
+    const mediaUrl = absoluteUrl(srcFor(state.filename, !!state.isExternal));
+    let subtitleUrl = null;
+    if (state.subtitle) {
+      const base = `${BACKEND}/uploads/${encodeURIComponent(state.subtitle)}`;
+      // The offset has to be baked into the file – the receiver can't shift it.
+      subtitleUrl = absoluteUrl(offset ? `${base}?offset=${encodeURIComponent(offset)}` : base);
+    }
+
+    castNote.textContent = CAST_UNSUPPORTED.test(state.filename)
+      ? 'Ten format może nie działać na telewizorze.'
+      : '';
+
+    castLoading = true;
+    castPlayer.loadMedia({
+      key,
+      url: mediaUrl,
+      contentType: contentTypeFor(state.isExternal ? '.mp4' : state.filename),
+      title: 'aleAnimiec',
+      subtitleUrl,
+      startTime: castTarget(state),
+      playing: !!state.playing,
+    }).then(() => {
+      castLoading = false;
+    }).catch(() => {
+      castLoading = false;
+      castNote.textContent = 'Nie udało się uruchomić na telewizorze.';
+    });
+  }
+
+  function castTarget(state) {
+    if (!state || !state.filename) return 0;
+    return state.playing
+      ? state.currentTime + (serverNow() - state.serverTime) / 1000
+      : state.currentTime;
+  }
+
+  // Keep the receiver roughly in step with the room.
+  setInterval(() => {
+    if (!casting || !castPlayer || castLoading) return;
+    if (!lastState || !lastState.filename || lastState.isEmbed) return;
+    if (!castPlayer.isConnected()) return;
+
+    castApply(lastState);
+    if (castLoading) return;
+
+    const target = castTarget(lastState);
+    const drift = castPlayer.currentTime() - target;
+
+    if (Math.abs(drift) > CAST_DRIFT_THRESHOLD) castPlayer.seek(target);
+
+    if (lastState.playing && castPlayer.isPaused()) castPlayer.play();
+    else if (!lastState.playing && !castPlayer.isPaused()) castPlayer.pause();
+  }, CAST_SYNC_INTERVAL);
+
   // ── Sync logic ───────────────────────────────────────────────────────────────
 
   const DRIFT_THRESHOLD_HARD = 0.15; // >150ms → hard seek
@@ -637,6 +793,7 @@
 
     if (!state.filename) {
       if (isEmbedMode || currentSrcKey) clearAll();
+      updateCastButton();
       setSyncStatus('waiting');
       return;
     }
@@ -645,6 +802,7 @@
     // so there is nowhere to draw subtitles.
     if (state.isEmbed) {
       dropSubtitles();
+      updateCastButton();
       if (!isEmbedMode || currentEmbedUrl !== state.filename) showEmbed(state.filename);
       const ytId = extractYouTubeId(state.filename);
       if (ytId && ytPlayer && ytPlayer.seekTo) {
@@ -663,6 +821,15 @@
 
     loadSubtitle(state.subtitle);
     subs.setOffset(state.subtitleOffset || 0);
+    updateCastButton();
+
+    // While casting, the receiver owns playback – don't also buffer and drive
+    // the local element.
+    if (casting) {
+      castApply(state);
+      setSyncStatus('casting');
+      return;
+    }
 
     const ok = await loadVideo(state.filename, !!state.isExternal);
     if (seq !== applySeq) return;      // superseded by a newer state
@@ -711,6 +878,8 @@
       setBuffering(false);
     }
     lastProgressAt = player.currentTime;
+
+    if (casting) return;   // the receiver has its own, looser correction loop
 
     if (!lastState || !lastState.filename || loadFailed) {
       player.playbackRate = 1.0;
@@ -862,6 +1031,7 @@
     paused:    { dot: 'yellow', text: 'Wstrzymano (admin)'      },
     ended:     { dot: 'yellow', text: 'Koniec filmu'            },
     embed:     { dot: 'yellow', text: 'Osadzony player – bez synchronizacji' },
+    casting:   { dot: 'green',  text: 'Odtwarzanie na telewizorze'  },
     corrected: { dot: 'yellow', text: 'Korekcja synchronizacji…'},
     buffering: { dot: 'yellow', text: 'Buforowanie…'            },
     error:     { dot: 'red',    text: 'Błąd ładowania filmu'    },

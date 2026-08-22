@@ -553,6 +553,29 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 }
 .admin-link:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ── cast (Chromecast) ── */
+.btn-cast.is-active { background: rgba(233,69,96,.75); border-color: var(--accent); }
+
+.cast-banner {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+  padding: .55rem .9rem;
+  background: rgba(13,13,13,.9);
+  border-bottom: 1px solid #333;
+  font-size: .82rem;
+  color: var(--text);
+  text-align: center;
+}
+.cast-banner strong { color: var(--accent); }
+.cast-banner__note { font-size: .75rem; color: #ffb300; }
+.cast-banner .btn { flex-shrink: 0; }
+
 /* ── responsive ── */
 @media (max-width: 640px) {
   header {

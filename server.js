@@ -13,7 +13,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 const multer = require('multer');
 
-const { normalizeToVtt, looksLikeSubtitles } = require('./lib/subtitle-format');
+const { normalizeToVtt, looksLikeSubtitles, shiftVtt } = require('./lib/subtitle-format');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -150,6 +150,38 @@ app.use((req, res, next) => {
 app.get('/health', (req, res) => res.sendStatus(200));
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ─── Uploaded media ──────────────────────────────────────────────────────────
+// A Cast receiver downloads the video and the subtitle track itself, usually
+// without an Origin header, and it refuses tracks that come back without CORS
+// headers. These files are public anyway (no password guards /uploads), so an
+// unconditional `*` here changes nothing except making casting possible.
+app.use('/uploads', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  next();
+});
+
+/**
+ * `/uploads/napisy.vtt?offset=1.5` returns the track with the offset already
+ * baked into its timings. The receiver knows nothing about the offset the admin
+ * dialled in, so it has to be part of the file it fetches.
+ */
+app.get('/uploads/:name', (req, res, next) => {
+  const offset = Number(req.query.offset);
+  const name = req.params.name;
+
+  if (!Number.isFinite(offset) || offset === 0) return next();
+  if (path.extname(name).toLowerCase() !== '.vtt') return next();
+
+  const full = safeUploadPath(name);
+  if (!full) return res.status(400).json({ error: 'Nieprawidłowa nazwa pliku' });
+
+  fs.readFile(full, 'utf8', (err, text) => {
+    if (err) return res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Nie znaleziono napisów' });
+    res.type('text/vtt; charset=utf-8');
+    res.send(shiftVtt(text, offset));
+  });
+});
 
 // Serve uploaded videos (dotfiles – including .state.json – stay hidden)
 app.use('/uploads', express.static(UPLOADS_DIR, { dotfiles: 'ignore' }));
