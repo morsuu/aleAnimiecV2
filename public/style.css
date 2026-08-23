@@ -639,6 +639,14 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .btn-subs { font-size: .78rem; font-weight: 700; padding: .4rem .5rem; line-height: 1; }
 .btn-subs[aria-expanded="true"] { background: rgba(233,69,96,.7); border-color: var(--accent); }
 
+.upload-warning {
+  display: block;
+  margin-left: 0 !important;
+  margin-top: .5rem;
+  color: #ffb300 !important;
+  line-height: 1.4;
+}
+
 /* ── responsive ── */
 @media (max-width: 640px) {
   header {

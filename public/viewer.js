@@ -647,10 +647,12 @@
   let currentSrcKey = null;
   let loadFailed = false;
 
+  function proxyUrl(url) {
+    return `${BACKEND}/proxy?url=${encodeURIComponent(url)}`;
+  }
+
   function srcFor(filename, isExternal) {
-    return isExternal
-      ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}`
-      : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
+    return isExternal ? filename : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
   }
 
   function showLoadError() {
@@ -661,26 +663,12 @@
   }
 
   /**
-   * Point <video> at the requested source. Resolves once the media is playable,
-   * on error, or after a timeout – an unresolved promise used to wedge applyState
-   * forever, leaving the viewer stuck with no explanation.
+   * Attach one URL to <video> and resolve when it is playable, errors, or times
+   * out. An unresolved promise used to wedge applyState forever, leaving the
+   * viewer stuck with no explanation.
    */
-  function loadVideo(filename, isExternal) {
-    // Only allow http/https for external URLs
-    if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) {
-      return Promise.resolve();
-    }
-
-    // Compare against a stored key rather than re-parsing player.src, whose
-    // escaping doesn't always round-trip and caused constant reloads.
-    const key = (isExternal ? 'ext:' : 'up:') + filename;
-    if (key === currentSrcKey) return Promise.resolve();
-
-    currentSrcKey = key;
-    loadFailed = false;
-    if (placeholderText) placeholderText.textContent = 'Ładowanie…';
-    placeholder.classList.remove('hidden');
-    player.src = srcFor(filename, isExternal);
+  function attachSource(url) {
+    player.src = url;
 
     return new Promise((resolve) => {
       let settled = false;
@@ -690,12 +678,6 @@
         clearTimeout(timer);
         player.removeEventListener('canplay', onCanPlay);
         player.removeEventListener('error', onError);
-        if (ok) {
-          placeholder.classList.add('hidden');
-          if (placeholderText) placeholderText.textContent = DEFAULT_PLACEHOLDER;
-        } else {
-          showLoadError();
-        }
         resolve(ok);
       };
       const onCanPlay = () => finish(true);
@@ -706,6 +688,52 @@
       player.addEventListener('error', onError);
       player.load();
     });
+  }
+
+  /**
+   * Point <video> at the room's current source.
+   *
+   * External links are tried **directly** first and only fall back to /proxy
+   * when that fails. A media element does not need CORS to play a cross-origin
+   * file, so a plain direct link (S3, R2, B2…) works — and skipping the relay
+   * means multi-gigabyte files no longer stream through our own server, which
+   * on a free plan is both the bandwidth cap and the bottleneck. The proxy stays
+   * for hosts that block hotlinking or answer with an HTML interstitial.
+   */
+  async function loadVideo(filename, isExternal) {
+    // Only allow http/https for external URLs
+    if (isExternal && !filename.startsWith('http://') && !filename.startsWith('https://')) {
+      return undefined;
+    }
+
+    // Compare against a stored key rather than re-parsing player.src, whose
+    // escaping doesn't always round-trip and caused constant reloads.
+    const key = (isExternal ? 'ext:' : 'up:') + filename;
+    if (key === currentSrcKey) return undefined;
+
+    currentSrcKey = key;
+    loadFailed = false;
+    if (placeholderText) placeholderText.textContent = 'Ładowanie…';
+    placeholder.classList.remove('hidden');
+
+    let ok = await attachSource(srcFor(filename, isExternal));
+
+    if (!ok && isExternal) {
+      // Direct fetch failed – hotlink protection, a redirect to HTML, whatever.
+      if (currentSrcKey !== key) return undefined;   // superseded meanwhile
+      if (placeholderText) placeholderText.textContent = 'Ładowanie przez serwer…';
+      ok = await attachSource(proxyUrl(filename));
+    }
+
+    if (currentSrcKey !== key) return undefined;
+
+    if (ok) {
+      placeholder.classList.add('hidden');
+      if (placeholderText) placeholderText.textContent = DEFAULT_PLACEHOLDER;
+    } else {
+      showLoadError();
+    }
+    return ok;
   }
 
   // A source can also fail after it started loading (proxy drops, 502 mid-stream).
@@ -795,6 +823,11 @@
     try { return new URL(relative, location.href).href; } catch (_) { return relative; }
   }
 
+  /** Ścieżka z URL-a, żeby wyłuskać rozszerzenie bez query stringa. */
+  function pathOf(url) {
+    try { return new URL(url).pathname; } catch (_) { return url; }
+  }
+
   function contentTypeFor(name) {
     const dot = name.lastIndexOf('.');
     const ext = dot === -1 ? '' : name.slice(dot).toLowerCase();
@@ -826,7 +859,7 @@
     castPlayer.loadMedia({
       key,
       url: mediaUrl,
-      contentType: contentTypeFor(state.isExternal ? '.mp4' : state.filename),
+      contentType: contentTypeFor(state.isExternal ? pathOf(state.filename) : state.filename),
       title: 'aleAnimiec',
       subtitleUrl,
       startTime: castTarget(state),

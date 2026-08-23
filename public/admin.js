@@ -465,10 +465,23 @@
     if (fileInput.files[0]) setSelectedFile(fileInput.files[0]);
   });
 
+  // Kontenery, których przeglądarki nie odtwarzają. `canPlayType` jest tu bez
+  // wartości: dla 'video/x-matroska' Chrome odpowiada "maybe" (bo umie WebM
+  // w MKV), a prawdziwy rip 4K z HEVC i tak nie zagra — za to dla
+  // 'video/quicktime' zwraca pustkę, choć .mov z H.264 działa. Jawna lista jest
+  // przewidywalna i zgadza się z tym, co komunikujemy użytkownikowi.
+  const UNPLAYABLE_CONTAINERS = ['.mkv', '.avi', '.wmv', '.flv', '.ts', '.m2ts'];
+
+  function unplayableContainer(file) {
+    const name = (file.name || '').toLowerCase();
+    return UNPLAYABLE_CONTAINERS.find((ext) => name.endsWith(ext)) || null;
+  }
+
   function setSelectedFile(file) {
     selectedFile = file;
     dropFilename.textContent = `${file.name} (${formatSize(file.size)})`;
     uploadControls.style.display = 'flex';
+    uploadStatus.classList.remove('upload-warning');
 
     // Catch an oversized file here – once the stream is rejected mid-upload the
     // browser usually reports a bare network error instead of the real reason.
@@ -478,7 +491,20 @@
       selectedFile = null;
       return;
     }
+
     uploadBtn.disabled = false;
+
+    const zlyKontener = unplayableContainer(file);
+    if (zlyKontener) {
+      uploadStatus.textContent = `Przeglądarki nie odtwarzają plików ${zlyKontener}. `
+        + 'Przekonwertuj do .mp4 (H.264 + AAC) zanim wyślesz kilka gigabajtów na darmo — '
+        + 'inaczej widzowie zobaczą tylko błąd ładowania.';
+      uploadStatus.classList.add('upload-warning');
+      uploadBtn.textContent = 'Wgraj mimo to ▲';
+      return;
+    }
+
+    uploadBtn.textContent = 'Wgraj ▲';
     uploadStatus.textContent = '';
   }
 
@@ -887,8 +913,13 @@
       currentSrcKey = key;
       // Swapping the source fires pause/seeked on the element; don't echo those.
       suppressSeekSync(1000);
+      // External links go straight to the host – a media element needs no CORS
+      // to play a cross-origin file, and relaying gigabytes through our own
+      // server is what eats the free plan's bandwidth. `triedProxy` lets the
+      // error handler retry through /proxy once, for hosts that block hotlinks.
+      triedProxy = false;
       player.src = isExternal
-        ? `${BACKEND}/proxy?url=${encodeURIComponent(filename)}`
+        ? filename
         : `${BACKEND}/uploads/${encodeURIComponent(filename)}`;
       player.load();
       placeholder.classList.add('hidden');
@@ -897,8 +928,22 @@
     showSeekBar(true);
   }
 
+  let triedProxy = false;
+
   player.addEventListener('error', () => {
     if (!currentSrcKey) return;
+
+    // A direct external link can fail on hotlink protection or an HTML
+    // interstitial – fall back to the relay once before giving up.
+    if (currentSrcKey.startsWith('ext:') && !triedProxy) {
+      triedProxy = true;
+      const url = currentSrcKey.slice(4);
+      suppressSeekSync(1000);
+      player.src = `${BACKEND}/proxy?url=${encodeURIComponent(url)}`;
+      player.load();
+      return;
+    }
+
     stateDot.className = 'dot red';
     stateLabel.textContent = 'Nie udało się załadować filmu (sprawdź plik lub URL).';
   });

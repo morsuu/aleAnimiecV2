@@ -102,7 +102,7 @@ Gdy `FRONTEND_URL` jest puste, dozwolone są wszystkie originy.
 | `GET` | `/subtitles` | Lista wgranych napisów |
 | `DELETE` | `/subtitles/:name` | Usunięcie napisów |
 | `GET` | `/uploads/…vtt?offset=N` | Napisy z wliczonym przesunięciem (dla odbiornika Cast) |
-| `GET` | `/proxy?url=…` | Streamowanie zewnętrznego URL (omija CORS, blokuje SSRF) |
+| `GET` | `/proxy?url=…` | Przekaźnik dla hostów blokujących hotlinkowanie (blokuje SSRF) |
 
 Wszystkie poza `/health`, `/proxy` i `/uploads` wymagają nagłówka
 `x-admin-password`. `/uploads` musi zostać publiczne, bo pobiera z niego zarówno
@@ -112,6 +112,31 @@ Nie ma osobnego endpointu logowania: ekran w panelu przyjmuje hasło bez
 weryfikacji, a błędne hasło objawia się dopiero tym, że serwer odrzuca komendy
 (biblioteka zostaje pusta, upload wraca z `403`, sterowanie odtwarzaniem nic nie
 robi).
+
+## Duże pliki i formaty
+
+Dwie rzeczy potrafią zabić seans, zanim się zacznie.
+
+**Format.** Typowy plik 4K to `.mkv` z wideo HEVC i dźwiękiem DTS/TrueHD —
+przeglądarka nie obsługuje **żadnego z tych trzech**. Rozmiar nie ma tu nic do
+rzeczy: taki plik nie zagra ani w 20 GB, ani w 200 MB. Panel ostrzega przy
+wyborze pliku o niegrywalnym kontenerze (`.mkv`, `.avi`, `.wmv`, `.flv`, `.ts`,
+`.m2ts`), zanim wyślesz gigabajty na darmo. Bezpieczny cel konwersji:
+
+```bash
+ffmpeg -i film.mkv -vf scale=-2:1080 -c:v libx264 -crf 20 -preset slow -c:a aac -b:a 192k -movflags +faststart film.mp4
+```
+
+`-movflags +faststart` jest obowiązkowe — bez tego indeks pliku ląduje na końcu
+i przeglądarka musi pobrać całość, zanim cokolwiek pokaże.
+
+**Transfer.** Link zewnętrzny jest odtwarzany **bezpośrednio z hosta**;
+`/proxy` włącza się dopiero wtedy, gdy bezpośrednia próba zawiedzie (ochrona
+przed hotlinkowaniem, strona pośrednia zamiast pliku). Element `<video>` nie
+potrzebuje CORS-a do odtworzenia pliku z innej domeny, więc kilkugigabajtowy
+film nie przechodzi już przez nasz serwer — a na darmowym planie to on jest
+i limitem transferu, i wąskim gardłem. Do dużych plików trzymaj je w storage'u
+z tanim transferem (Cloudflare R2, Backblaze B2) i wklejaj bezpośredni link.
 
 ## Panel admina
 
