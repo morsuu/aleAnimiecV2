@@ -141,6 +141,12 @@ linie w tym samym momencie.
   „na oko" na obrazie.
 - **Widz** może wyłączyć napisy lokalnie przyciskiem **CC** (wybór zapamiętywany
   w `localStorage`); nie wpływa to na pozostałych.
+- **Wygląd napisów** ustawia każdy u siebie przyciskiem **Aa** obok CC:
+  rozmiar 60–220 % (krok 10 %) oraz tło — *pełne*, *lekkie* (domyślne) albo
+  *brak*, gdzie zamiast prostokąta tekst dostaje obrys. Ustawienia siedzą
+  w `localStorage`, są czysto lokalne i nie idą do serwera ani do innych widzów —
+  każdy ogląda na innym ekranie i z innej odległości. Skalowanie działa też
+  w trybie pełnoekranowym.
 - Konwersja i parser mają testy jednostkowe — patrz [Testy](#testy).
 - Napisy renderujemy własną warstwą, a nie `<track>` — dzięki temu offset działa
   natychmiast bez przeładowania i nie zależy od `crossorigin` przy backendzie
@@ -175,6 +181,8 @@ Szczegóły implementacji:
   w takim wypadku baner ostrzega zamiast pokazywać czarny ekran.
 - Cały moduł (`public/cast.js`) jest defensywny: gdy SDK się nie załaduje albo
   przeglądarka nie zna Casta, przycisk po prostu się nie pojawia.
+- Ustawienia wyglądu napisów (**Aa**) nie mają wpływu na obraz na telewizorze —
+  tam napisy rysuje odbiornik i to on decyduje o ich wyglądzie.
 
 ## Zdarzenia Socket.io
 

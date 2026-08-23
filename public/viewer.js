@@ -19,6 +19,13 @@
   const subtitleLayer = document.getElementById('subtitle-layer');
   const btnCc         = document.getElementById('btn-cc');
   const btnCast       = document.getElementById('btn-cast');
+  const btnSubs       = document.getElementById('btn-subs');
+  const subsPanel     = document.getElementById('subs-panel');
+  const subsSmaller   = document.getElementById('subs-smaller');
+  const subsBigger    = document.getElementById('subs-bigger');
+  const subsScaleLabel= document.getElementById('subs-scale-label');
+  const subsBgGroup   = document.getElementById('subs-bg-group');
+  const subsReset     = document.getElementById('subs-reset');
   const castBanner    = document.getElementById('cast-banner');
   const castDevice    = document.getElementById('cast-device');
   const castNote      = document.getElementById('cast-note');
@@ -224,6 +231,8 @@
     if (!currentSubtitleFile) {
       subs.clear();
       btnCc.classList.add('hidden');
+      btnSubs.classList.add('hidden');
+      toggleSubsPanel(false);
       return;
     }
 
@@ -234,10 +243,12 @@
       if (currentSubtitleFile !== file) return;   // a newer track won the race
       subs.setCues(cues);
       btnCc.classList.toggle('hidden', cues.length === 0);
+      btnSubs.classList.toggle('hidden', cues.length === 0);
       updateCcButton();
     } catch (_) {
       subs.clear();
       btnCc.classList.add('hidden');
+      btnSubs.classList.add('hidden');
     }
   }
 
@@ -245,6 +256,8 @@
     currentSubtitleFile = null;
     subs.clear();
     btnCc.classList.add('hidden');
+    btnSubs.classList.add('hidden');
+    toggleSubsPanel(false);
   }
 
   // A timer rather than requestAnimationFrame: rAF is suspended while the tab is
@@ -252,6 +265,95 @@
   setInterval(() => {
     if (currentSrcKey && !isEmbedMode) subs.update(player.currentTime);
   }, 100);
+
+  // ── Wygląd napisów ─────────────────────────────────────────────────────────
+  // Czysto lokalne ustawienia widza – nic z tego nie leci do serwera ani do
+  // pozostałych. Każdy ogląda na innym ekranie i z innej odległości.
+
+  const LOOK_KEY = 'aleanimiec.subsLook';
+  const SCALE_MIN = 0.6;
+  const SCALE_MAX = 2.2;
+  const SCALE_STEP = 0.1;
+  const BACKGROUNDS = ['solid', 'soft', 'none'];
+  const LOOK_DEFAULT = { scale: 1, bg: 'soft' };
+
+  let look = loadLook();
+
+  function loadLook() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LOOK_KEY) || '{}');
+      const scale = Number(raw.scale);
+      return {
+        scale: Number.isFinite(scale) ? clampScale(scale) : LOOK_DEFAULT.scale,
+        bg: BACKGROUNDS.includes(raw.bg) ? raw.bg : LOOK_DEFAULT.bg,
+      };
+    } catch (_) {
+      return { ...LOOK_DEFAULT };
+    }
+  }
+
+  function saveLook() {
+    try { localStorage.setItem(LOOK_KEY, JSON.stringify(look)); } catch (_) {}
+  }
+
+  function clampScale(value) {
+    // Zaokrąglenie do kroku – inaczej zmiennoprzecinkowe resztki dają 109.99999%.
+    return Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(value * 10) / 10));
+  }
+
+  function applyLook() {
+    subtitleLayer.style.setProperty('--sub-scale', look.scale);
+    subtitleLayer.dataset.bg = look.bg;
+
+    subsScaleLabel.textContent = `${Math.round(look.scale * 100)}%`;
+    subsSmaller.disabled = look.scale <= SCALE_MIN;
+    subsBigger.disabled = look.scale >= SCALE_MAX;
+
+    subsBgGroup.querySelectorAll('button').forEach((b) => {
+      b.setAttribute('aria-pressed', b.dataset.bg === look.bg ? 'true' : 'false');
+    });
+  }
+
+  function nudgeScale(delta) {
+    look.scale = clampScale(look.scale + delta);
+    applyLook();
+    saveLook();
+  }
+
+  subsSmaller.addEventListener('click', () => nudgeScale(-SCALE_STEP));
+  subsBigger.addEventListener('click', () => nudgeScale(SCALE_STEP));
+
+  subsBgGroup.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-bg]');
+    if (!btn) return;
+    look.bg = btn.dataset.bg;
+    applyLook();
+    saveLook();
+  });
+
+  subsReset.addEventListener('click', () => {
+    look = { ...LOOK_DEFAULT };
+    applyLook();
+    saveLook();
+  });
+
+  function toggleSubsPanel(open) {
+    const show = open === undefined ? subsPanel.classList.contains('hidden') : open;
+    subsPanel.classList.toggle('hidden', !show);
+    btnSubs.setAttribute('aria-expanded', show ? 'true' : 'false');
+  }
+
+  btnSubs.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleSubsPanel();
+  });
+
+  // Klik poza panelem go zamyka; klik w środku nie.
+  subsPanel.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => toggleSubsPanel(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleSubsPanel(false); });
+
+  applyLook();
 
   // ── Embed helpers ──────────────────────────────────────────────────────────
 
