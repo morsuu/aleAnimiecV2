@@ -77,6 +77,12 @@ bajtów uploadu po gotowe cue, razem z dekodowaniem Windows-1250.
 
 Vercel nie obsługuje WebSocket na serverless – dlatego backend Socket.io jest na Render. Frontend na Vercel łączy się z backendem przez `BACKEND_URL`.
 
+Klienta socket.io ładuje `public/socket-loader.js`. Uśpiony backend na darmowym
+planie Render odpowiada błędem, dopóki się nie wybudzi, więc loader ponawia próbę
+co 5 s przez maksymalnie 2 minuty i w międzyczasie pokazuje **Budzenie serwera…**.
+Jeśli po tym czasie nadal jest „Brak serwera”, backend naprawdę nie działa —
+sprawdź logi i status deployu w dashboardzie Render oraz adres w `public/config.js`.
+
 ## Zmienne środowiskowe
 
 | Zmienna | Gdzie | Opis |

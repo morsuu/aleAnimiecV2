@@ -93,7 +93,7 @@
   let linkEntries = loadLinks();
 
   if (typeof io === 'undefined') {
-    pwError.textContent = 'Nie można załadować klienta socket.io – serwer jest niedostępny.';
+    pwError.textContent = 'Serwer nie odpowiada (sprawdź backend na Render) – odśwież stronę za chwilę.';
     connDot.className = 'dot red';
     connLabel.textContent = 'Brak serwera';
     return;
